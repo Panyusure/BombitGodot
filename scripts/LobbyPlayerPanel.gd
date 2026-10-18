@@ -11,6 +11,49 @@ var choice = null
 var occupied_character := -1
 var textures := {}
 var clock := 0.0
+var _last_character := -1
+var _last_ready := false
+var _swap := 0.0
+var _ready_burst := 0.0
+
+func animate(delta: float) -> void:
+	if choice == null:
+		return
+	if choice.selected_character != _last_character:
+		_last_character = choice.selected_character
+		_swap = 0.0
+	if choice.is_ready and not _last_ready:
+		_ready_burst = 1.0
+	_last_ready = choice.is_ready
+	_swap = minf(1, _swap + delta * 4.5)
+	_ready_burst = maxf(0, _ready_burst - delta * 2.5)
+	queue_redraw()
+
+func _draw_stage(accent: Color, ready: bool) -> void:
+	var center := Vector2(size.x * 0.5, 149)
+	draw_rect(Rect2(8, 68, size.x - 16, 165), Color("211A2B"))
+	UIDraw.dots(self, 8, 68, size.x - 16, 165, accent, 0.13, 12)
+	var direction := 1.0 if slot == 0 else -1.0
+	for ray in 16:
+		var angle := ray * TAU / 16 + clock * 0.16 * direction
+		var color := Color(accent, 0.1 if ray % 2 == 0 else 0.04)
+		draw_colored_polygon(PackedVector2Array([center, center + Vector2.from_angle(angle) * 79,
+			center + Vector2.from_angle(angle + 0.17) * 79]), color)
+	draw_circle(center, 67, Color(accent, 0.12), true, -1, true)
+	for ring in 3:
+		var radius := 68.0 + ring * 5
+		for segment in 4:
+			var angle := segment * TAU / 4 + clock * (0.3 + ring * 0.12) * direction * (-1 if ring == 1 else 1)
+			draw_arc(center, radius, angle, angle + 0.85, 16,
+				Color(UIDraw.GREEN if ready else accent, 0.75 - ring * 0.15), 2 if ring == 0 else 1, true)
+	for particle in 9:
+		var angle := clock * direction * 0.35 + particle * TAU / 9
+		var point := center + Vector2.from_angle(angle) * (72 + sin(clock * 1.8 + particle) * 5)
+		draw_circle(point, 1.4, accent, true, -1, true)
+	if _ready_burst > 0:
+		draw_arc(center, 55 + (1 - _ready_burst) * 25, 0, TAU, 64, Color(UIDraw.GREEN, _ready_burst), 4 * _ready_burst, true)
+	UIDraw.text(self, "SPIRIT %02d" % (choice.selected_character + 1), 18, 82,
+		{"size": 11, "family": "mono", "fill": accent})
 
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_STOP
@@ -53,6 +96,8 @@ func _draw() -> void:
 	var ready: bool = choice.is_ready
 	UIDraw.panel(self, 0, 0, size.x, size.y, {"fill": UIDraw.CREAM, "stroke": UIDraw.INK, "lw": 2.5,
 		"r": 5, "shadow": accent, "shadowX": 5, "shadowY": 5})
+	if ready:
+		UIDraw.stroke_rr(self, 2, 2, size.x - 4, size.y - 4, 4, Color(UIDraw.GREEN, 0.55 + 0.2 * sin(clock * 3)), 2)
 	UIDraw.fill_rr(self, 0, 0, size.x, 62, 5, UIDraw.INK)
 	UIDraw.tag(self, "%dP" % (slot + 1), 14, 19, {"size": 16, "family": "impact", "fill": accent,
 		"h": 24, "align": "left", "stroke": null})
@@ -64,14 +109,15 @@ func _draw() -> void:
 	elif not choice.has_control:
 		device = "手柄未连接 · 请重连或修改设置"
 	UIDraw.text(self, device, 14, 47, {"size": 11, "weight": 500, "fill": UIDraw.CREAM, "max_width": size.x - 28})
-	UIDraw.dots(self, 8, 68, size.x - 16, 165, UIDraw.INK, 0.045, 12)
-	draw_circle(Vector2(size.x * 0.5, 149), 73, accent, true, -1.0, true)
-	draw_arc(Vector2(size.x * 0.5, 149), 76, 0, TAU, 64, UIDraw.INK, 2, true)
+	_draw_stage(accent, ready)
 	var texture: Texture2D = textures.get(id)
 	if texture != null:
-		var scale_factor := minf(182.0 / texture.get_width(), 154.0 / texture.get_height())
+		var reveal := 1 - pow(1 - _swap, 3)
+		var scale_factor := minf(182.0 / texture.get_width(), 154.0 / texture.get_height()) * (0.82 + 0.18 * reveal)
 		var dimensions := texture.get_size() * scale_factor
-		draw_texture_rect(texture, Rect2(Vector2((size.x - dimensions.x) * 0.5, 225 - dimensions.y + sin(clock * 2.0 + slot) * 2), dimensions), false)
+		var slide := (1 - reveal) * (-18 if slot == 0 else 18)
+		draw_texture_rect(texture, Rect2(Vector2((size.x - dimensions.x) * 0.5 + slide, 225 - dimensions.y + sin(clock * 2.0 + slot) * 2), dimensions), false,
+			Color(1, 1, 1, 0.4 + 0.6 * reveal))
 	for direction in [-1, 1]:
 		var rect := arrow_rect(direction)
 		UIDraw.panel(self, rect.position.x, rect.position.y, rect.size.x, rect.size.y,
@@ -80,6 +126,7 @@ func _draw() -> void:
 			{"size": 28, "fill": UIDraw.CREAM, "align": "center"})
 	UIDraw.text(self, info["name"], size.x * 0.5, 246, {"size": 24, "weight": 900, "fill": UIDraw.INK, "align": "center"})
 	UIDraw.text(self, skill["name"], size.x * 0.5, 272, {"size": 13, "fill": UIDraw.INK, "align": "center"})
+	draw_line(Vector2(16, 281), Vector2(size.x - 16, 281), Color(accent, 0.65), 2, true)
 	UIDraw.wrap(self, skill["desc"], 14, 292, size.x - 28, 11, 15, Color(0.12, 0.1, 0.15, 0.8), 2)
 	for i in Cfg.CHAR_IDS.size():
 		var rect := tile_rect(i)

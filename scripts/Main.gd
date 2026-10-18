@@ -37,6 +37,7 @@ func _ready() -> void:
 	audio = get_node_or_null("/root/GameAudio")
 	# 输入层：读 user://settings.cfg，把操作方式 / 死区 / 绑定表装进 InputMap。
 	InputSettings.ensure_loaded()
+	_setup_display()
 	if ResourceLoader.exists(FONT_PATH):
 		font = load(FONT_PATH)
 	board.font = font
@@ -45,6 +46,7 @@ func _ready() -> void:
 	menu.start_requested.connect(_on_menu_start)
 	menu.mute_toggled.connect(_toggle_mute)
 	menu.replay_requested.connect(_on_replay_requested)
+	menu.settings_closed.connect(_close_pause_settings)
 	replay_ui.setup(self)
 	replay_ui.visible = false
 	overlay.action.connect(_on_overlay_action)
@@ -52,7 +54,7 @@ func _ready() -> void:
 	actors.visible = false
 	hud.visible = false
 	menu.visible = true
-	DisplayServer.window_set_title("Q版泡泡堂 BombIt · Godot 移植版")
+	DisplayServer.window_set_title("Q版泡泡堂 BombIt")
 	# 特效层：粒子画在角色之上、场地边框之下（边框在 Hud 的 CanvasLayer 里）。
 	# 在 _ready 末尾 add_child → 同层内排在 Actors 之后；基准位置与 Board/Actors 一致。
 	effects = load("res://scripts/Effects.gd").new()
@@ -60,6 +62,29 @@ func _ready() -> void:
 	effects.position = Vector2(0.0, Cfg.HUD_H)
 	add_child(effects)
 	audio.play_music("menu")
+
+func _setup_display() -> void:
+	get_window().content_scale_aspect = Window.CONTENT_SCALE_ASPECT_EXPAND
+	var layer := CanvasLayer.new()
+	layer.name = "ScreenBackdrop"
+	layer.layer = -10
+	add_child(layer)
+	layer.add_child(preload("res://scripts/ScreenBackdrop.gd").new())
+	get_viewport().size_changed.connect(_center_content)
+	_center_content()
+	if InputSettings.fullscreen_enabled() and DisplayServer.get_name() != "headless":
+		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN)
+
+func _center_content() -> void:
+	var origin := preload("res://scripts/ScreenBackdrop.gd").content_origin(get_viewport_rect().size)
+	position = origin
+	$UILayer.offset = origin
+
+func _close_pause_settings() -> void:
+	if state == State.PAUSE:
+		overlay.visible = true
+		overlay._sync_nav()
+		_sync_action_edges()
 
 func _on_menu_start(m: String, c1: String, c2: String) -> void:
 	if state != State.MENU:
@@ -201,6 +226,10 @@ func _on_overlay_action(name: String) -> void:
 				state = State.PLAY
 				overlay.hide_overlay()
 				_sync_action_edges()
+		"settings":
+			if state == State.PAUSE:
+				overlay.visible = false
+				menu.open_pause_settings()
 		"restart":
 			_restart_run()
 		"menu":
@@ -242,6 +271,12 @@ func _input(event: InputEvent) -> void:
 		InputSettings.note_device(int(event.device))
 
 func _unhandled_input(event: InputEvent) -> void:
+	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_F11:
+		InputSettings.set_fullscreen(not InputSettings.fullscreen_enabled())
+		get_viewport().set_input_as_handled()
+		return
+	if state == State.PAUSE and menu.settings_open:
+		return
 	# 手柄 Start：暂停 / 继续（等价于键盘 Esc / P；键位捕获时 Menu 会先吃掉事件）
 	if event is InputEventJoypadButton:
 		if event.pressed and int(event.button_index) == JOY_BUTTON_START \
@@ -254,10 +289,6 @@ func _unhandled_input(event: InputEvent) -> void:
 	if not (event is InputEventKey) or not event.pressed or event.echo:
 		return
 	var key: int = event.keycode
-	if key == KEY_F11:
-		var mode_now = DisplayServer.window_get_mode()
-		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED if mode_now == DisplayServer.WINDOW_MODE_FULLSCREEN else DisplayServer.WINDOW_MODE_FULLSCREEN)
-		return
 	match state:
 		State.PLAY:
 			if key == KEY_ESCAPE or key == KEY_P:

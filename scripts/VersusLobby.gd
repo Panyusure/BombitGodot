@@ -63,7 +63,7 @@ func _process(delta: float) -> void:
 	process_inputs(delta)
 	for panel in panels:
 		panel.clock = _clock
-		panel.queue_redraw()
+		panel.animate(delta)
 	queue_redraw()
 
 func process_inputs(delta: float) -> void:
@@ -161,9 +161,22 @@ func _gui_input(event: InputEvent) -> void:
 func _draw() -> void:
 	if model.players.size() != 2:
 		return
+	# The parent menu supplies its cream paper and faint character wallpaper.
+	draw_rect(Rect2(0, 0, 360, 696), Color(UIDraw.CYAN, 0.05))
+	draw_rect(Rect2(360, 0, 360, 696), Color(UIDraw.PINK, 0.05))
+	for stripe in 12:
+		var y := fposmod(stripe * 68 + _clock * 12, 816) - 60
+		draw_line(Vector2(0, y + 80), Vector2(300, y - 30), Color(UIDraw.CYAN, 0.3), 1, true)
+		draw_line(Vector2(420, y - 30), Vector2(720, y + 80), Color(UIDraw.PINK, 0.3), 1, true)
+	draw_line(Vector2(360, 120), Vector2(360, 540), Color(UIDraw.INK, 0.16), 1, true)
+	for spark in 7:
+		var y := 120 + fposmod(_clock * 40 + spark * 60, 420)
+		draw_circle(Vector2(360, y), 2, UIDraw.YELLOW, true, -1, true)
 	UIDraw.text(self, "LOCAL VERSUS / 双人准备室", 22, 31, {"size": 11, "family": "mono", "fill": UIDraw.INK})
-	UIDraw.text(self, "各自选角，一起开战", 20, 65, {"size": 27, "weight": 900, "fill": UIDraw.INK,
+	UIDraw.text(self, "各自选角，一起开战", 20, 63, {"size": 27, "weight": 900, "fill": UIDraw.INK,
 		"shadow": UIDraw.ORANGE, "shadowX": 2, "shadowY": 2})
+	draw_arc(Vector2(582, 56), 29, _clock * 0.55, _clock * 0.55 + PI * 1.5, 40, UIDraw.ORANGE, 2, true)
+	UIDraw.text(self, "VS", 582, 56, {"size": 30, "family": "impact", "fill": UIDraw.INK, "align": "center"})
 	for slot in 2:
 		var choice = model.players[slot]
 		var x := 20 if slot == 0 else 368
@@ -175,6 +188,10 @@ func _draw() -> void:
 	var ready := model.can_start_game()
 	UIDraw.panel(self, 180, 566, 360, 56, {"fill": UIDraw.YELLOW if ready else UIDraw.PAPER,
 		"stroke": UIDraw.INK, "lw": 2.5, "r": 4, "shadow": UIDraw.INK, "shadowX": 4, "shadowY": 4})
+	if ready:
+		UIDraw.stroke_rr(self, 175, 561, 370, 66, 6, Color(UIDraw.YELLOW, 0.55 + 0.2 * sin(_clock * 3)), 2)
+		var scan := 180 + fposmod(_clock * 110, 360)
+		draw_line(Vector2(scan, 572), Vector2(scan, 616), Color(UIDraw.WHITE, 0.25), 3, true)
 	var count := int(model.players[0].is_ready) + int(model.players[1].is_ready)
 	UIDraw.text(self, "开始对战" if ready else "等待双方准备  %d / 2" % count, 360, 586,
 		{"size": 20, "weight": 900, "fill": UIDraw.INK, "align": "center"})

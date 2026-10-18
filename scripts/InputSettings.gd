@@ -92,6 +92,7 @@ static func _default_cfg() -> Dictionary:
 		"p1": {"mode": MODE_AUTO, "device": -1},
 		"p2": {"mode": MODE_AUTO, "device": -1},
 		"audio": {"sfx": 1.0, "music": 1.0},
+		"fullscreen": false,
 	}
 
 ## 幂等初始化：Main / Menu 的 _ready 都会调用，先到先算。
@@ -189,6 +190,7 @@ static func _load_file() -> void:
 	var cf := ConfigFile.new()
 	if cf.load(config_path) != OK:
 		return
+	_cfg["fullscreen"] = bool(cf.get_value("display", "fullscreen", false))
 	_cfg["deadzone"] = clampf(float(cf.get_value("controller", "deadzone", DEADZONE_DEFAULT)),
 		DEADZONE_MIN, DEADZONE_MAX)
 	_cfg["rumble"] = bool(cf.get_value("controller", "rumble", true))
@@ -210,6 +212,7 @@ static func _load_file() -> void:
 
 static func _save() -> void:
 	var cf := ConfigFile.new()
+	cf.set_value("display", "fullscreen", bool(_cfg.get("fullscreen", false)))
 	cf.set_value("meta", "version", CONFIG_VERSION)
 	cf.set_value("controller", "deadzone", float(_cfg["deadzone"]))
 	cf.set_value("controller", "rumble", bool(_cfg["rumble"]))
@@ -450,6 +453,17 @@ static func set_rumble(on: bool) -> void:
 	_cfg["rumble"] = on
 	_save()
 
+
+static func fullscreen_enabled() -> bool:
+	ensure_loaded()
+	return bool(_cfg.get("fullscreen", false))
+
+static func set_fullscreen(enabled: bool) -> void:
+	ensure_loaded()
+	_cfg["fullscreen"] = enabled
+	if DisplayServer.get_name() != "headless":
+		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN if enabled else DisplayServer.WINDOW_MODE_WINDOWED)
+	_save()
 
 static func audio_value(kind: String) -> float:
 	ensure_loaded()

@@ -135,6 +135,11 @@ static func update_enemy(world, e, dt: float) -> void:
         e.moving = false
         return
 
+    # A slow actor cannot make progress upstream. Replan instead of repeatedly
+    # walking into a faster belt and waiting for the player to change its plan.
+    if not e.dir.is_empty() and not can_walk_direction(world, e, Vector2i(int(e.dir["x"]), int(e.dir["y"]))):
+        e.dir = {}
+        e.returning = false
     var manual = not e.dir.is_empty() and e.moving and e.stun <= 0.0 and e.windup <= 0.0
     var carried = Scenery.carry(world, e, dt, manual)
     if carried:
@@ -216,8 +221,25 @@ static func update_enemy(world, e, dt: float) -> void:
 static func move_carried_enemy(world, e, tx: float, ty: float, distance: float, carried: bool) -> void:
     var moved = false
     var axes: Array = ["x", "y"] if not e.dir.is_empty() and int(e.dir["x"]) != 0 else ["y", "x"]
-    if not carried:
-        axes.reverse()
+    axes.reverse()  # Align the crossing lane before advancing toward its exit.
+    if carried and not e.dir.is_empty():
+        var flow := Scenery.factory_flow(world, e.x, e.y)
+        var steering_axis: String = axes[0]
+        var transverse := flow.x if steering_axis == "x" else flow.y
+        var lane := tx if steering_axis == "x" else ty
+        var offset := lane - float(e.get(steering_axis))
+        # Grid steering cancels small transverse belt drift, like player corner
+        # assistance. Sweep every 2px so correction cannot pass through a bomb.
+        if absf(transverse) > 0 and absf(offset) <= Cfg.TILE * 0.55:
+            while absf(offset) > 0.0001:
+                var correction := signf(offset) * minf(2, absf(offset))
+                var nx: float = e.x + (correction if steering_axis == "x" else 0)
+                var ny: float = e.y + (correction if steering_axis == "y" else 0)
+                if not Grid.can_move_enemy(world, e, nx, ny):
+                    break
+                e.x = nx
+                e.y = ny
+                offset = lane - float(e.get(steering_axis))
     for axis in axes:
         if distance <= 1e-9:
             break
@@ -250,11 +272,17 @@ static func move_carried_enemy(world, e, tx: float, ty: float, distance: float, 
         e.scenery_motion = false
         decide(world, e)
 
+static func can_walk_direction(world, e, direction: Vector2i) -> bool:
+    var flow := Scenery.factory_flow(world, e.x, e.y)
+    return flow.dot(Vector2(direction)) + move_speed(e) * Cfg.TILE > 0.001
+
 static func decide(world, e) -> void:
     var c = Grid.col(e.x)
     var r = Grid.row(e.y)
     var opts: Array = []
     for d in DIRS:
+        if not can_walk_direction(world, e, d):
+            continue
         var nc: int = c + d.x
         var nr: int = r + d.y
         if not Grid.in_bounds(nc, nr):

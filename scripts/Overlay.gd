@@ -60,7 +60,7 @@ func _process(delta: float) -> void:
 
 # ---------------- 手柄 / 键盘导航 ----------------
 #
-# 不新增按钮：只把已有的 3 个暂停按钮 / 简报按钮 / 结算按钮接到导航状态机上，
+# 暂停的三个操作与设置齿轮 / 简报按钮 / 结算按钮接到导航状态机上，
 # 高亮沿用原有的「选中项 = 墨色反白」，另加一圈呼吸焦点环。
 # 方向与确认交给这里（限速重复），快捷键（R / M / Esc）仍走 _unhandled_input 与 Main。
 
@@ -113,7 +113,7 @@ func _process_nav(delta: float) -> void:
 func _nav_step(step_dir: int) -> void:
 	nav_mode = true
 	if mode == Mode.PAUSE:
-		index = (index + step_dir + 3) % 3
+		index = (index + step_dir + 4) % 4
 	elif mode == Mode.RESULT:
 		index = (index + step_dir + 2) % 2
 
@@ -158,7 +158,7 @@ func _update_hover() -> void:
 		if Rect2(BRIEF_BTN["x"], BRIEF_BTN["y"], BRIEF_BTN["w"], BRIEF_BTN["h"]).has_point(p):
 			hover = 0
 	elif mode == Mode.PAUSE:
-		for i in 3:
+		for i in 4:
 			if _pause_btn(i).has_point(p):
 				hover = i
 				index = i
@@ -268,6 +268,8 @@ func _pause_card() -> Rect2:
 
 func _pause_btn(i: int) -> Rect2:
 	var c = _pause_card()
+	if i == 3:
+		return Rect2(c.end.x - 66, c.position.y + 86, 40, 40)
 	var total: float = 3 * PAUSE_BTN["h"] + 2 * PAUSE_BTN["gap"]
 	var y0 = c.position.y + c.size.y - total - 24
 	return Rect2(c.position.x + (c.size.x - PAUSE_BTN["w"]) * 0.5,
@@ -300,7 +302,7 @@ func _gui_input(event: InputEvent) -> void:
 			if Rect2(BRIEF_BTN["x"], BRIEF_BTN["y"], BRIEF_BTN["w"], BRIEF_BTN["h"]).has_point(p):
 				action.emit("start")
 		elif mode == Mode.PAUSE:
-			for i in 3:
+			for i in 4:
 				if _pause_btn(i).has_point(p):
 					_pause_action(i)
 		elif mode == Mode.RESULT:
@@ -327,6 +329,8 @@ func _pause_action(i: int) -> void:
 		action.emit("resume")
 	elif i == 1:
 		action.emit("restart")
+	elif i == 3:
+		action.emit("settings")
 	else:
 		action.emit("menu")
 
@@ -403,6 +407,13 @@ func _draw_pause() -> void:
 	]
 	for i in 3:
 		_draw_pause_button(i, items[i])
+	var gear := _pause_btn(3)
+	UIDraw.panel(self, gear.position.x, gear.position.y, gear.size.x, gear.size.y,
+		{"fill": UIDraw.YELLOW if index == 3 or hover == 3 else UIDraw.PAPER,
+		"stroke": UIDraw.INK, "lw": 2, "r": 3, "shadow": UIDraw.CYAN, "shadowX": 3, "shadowY": 3})
+	UIDraw.gear(self, gear.get_center().x, gear.get_center().y, UIDraw.INK)
+	UIDraw.text(self, "设置", gear.get_center().x, gear.end.y + 14,
+		{"size": 11, "fill": UIDraw.INK, "align": "center"})
 	UIDraw.tag(self, "↑↓ 选择 · A / Enter 确认 · B / Esc 继续", Cfg.VIEW_W * 0.5, Cfg.VIEW_H - 25,
 		{"size": 11, "weight": 700, "family": "mono", "fill": UIDraw.INK,
 		"fg": UIDraw.CREAM, "padX": 9, "h": 18, "align": "center", "stroke": UIDraw.CREAM, "lw": 1})

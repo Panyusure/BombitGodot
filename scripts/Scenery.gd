@@ -157,6 +157,18 @@ static func carry_bomb(world, b: Bomb, dt: float) -> bool:
         moved = true
     return moved
 
+## Factory velocity at an actor's current lane; park riders can walk freely.
+static func factory_flow(world, x: float, y: float) -> Vector2:
+    if String(world.landmark.get("theme", "")) != "factory":
+        return Vector2.ZERO
+    var path: Array = world.landmark.get("path", [])
+    if not path.has(Vector2i(Grid.col(x), Grid.row(y))):
+        return Vector2.ZERO
+    var at := nearest(path, x, y)
+    if at.is_empty() or float(at["distance"]) > Cfg.TILE * 0.48:
+        return Vector2.ZERO
+    return Vector2(float(at["dx"]), float(at["dy"])) * 1.65 * Cfg.TILE
+
 static func carry(world, p, dt: float, manual: bool) -> bool:
     var lm: Dictionary = world.landmark
     if lm.is_empty():

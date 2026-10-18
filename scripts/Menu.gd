@@ -7,6 +7,7 @@ extends Control
 signal start_requested(mode: String, p1: String, p2: String)
 signal mute_toggled
 signal replay_requested
+signal settings_closed
 
 const MODES := [
 	{"id": "adventure", "input_mode": "solo", "label": "单人 · 闯关打怪",
@@ -44,7 +45,7 @@ const SETTINGS_CARD := {"x": 60.0, "y": 38.0, "w": 600.0, "h": 620.0}
 const NAV_FIRST_DELAY := 0.35
 const NAV_REPEAT_DELAY := 0.09
 const SETTINGS_TABS := [
-	{"id": "audio", "label": "声音", "en": "AUDIO"},
+	{"id": "audio", "label": "画面与声音", "en": "AV"},
 	{"id": "pad", "label": "控制器", "en": "PAD"},
 	{"id": "keys", "label": "键位", "en": "KEYS"},
 ]
@@ -72,6 +73,7 @@ var step_t := 0.0
 var switch_t := 1.0
 var hover := {}
 var settings_open := false
+var settings_only := false
 var drag_slider := ""
 var sfx_level := 1.0
 var music_level := 1.0
@@ -149,6 +151,7 @@ func reset() -> void:
 	_started = false
 	step = "mode"
 	settings_open = false
+	settings_only = false
 	capture_target = {}
 	toast_text = ""
 	step_t = 0.0
@@ -167,7 +170,7 @@ func _process(delta: float) -> void:
 	switch_t = minf(1.0, switch_t + delta * 4.0)
 	if toast_time > 0.0:
 		toast_time -= delta
-	versus_lobby.visible = visible and _is_versus_lobby() and not settings_open and not _started
+	versus_lobby.visible = visible and _is_versus_lobby() and not settings_open and not _started and not settings_only
 	if visible:
 		_update_hover()
 		if not _started:
@@ -344,6 +347,9 @@ func _settings_done_rect() -> Rect2:
 	return Rect2(float(SETTINGS_CARD["x"]) + float(SETTINGS_CARD["w"]) - 120,
 		float(SETTINGS_CARD["y"]) + float(SETTINGS_CARD["h"]) - SETTINGS_FOOT, 96, 30)
 
+func _fullscreen_rect() -> Rect2:
+	return Rect2(_settings_body_x() + 8, _settings_body_y() + 284, 532, 48)
+
 func _settings_tab_rect(i: int) -> Rect2:
 	return Rect2(float(SETTINGS_CARD["x"]) + float(SETTINGS_TAB["x"])
 		+ i * (float(SETTINGS_TAB["w"]) + float(SETTINGS_TAB["gap"])),
@@ -456,6 +462,9 @@ func _update_settings_hover() -> void:
 			return
 	match settings_tab:
 		"audio":
+			if _hit(_fullscreen_rect(), p):
+				hover = {"kind": "fullscreen"}
+				return
 			for kind in ["sfx", "music"]:
 				if _hit(_settings_slider_hit(kind), p):
 					hover = {"kind": "slider", "id": kind}
@@ -511,6 +520,9 @@ func _handle_settings_click(p: Vector2) -> void:
 			return
 	match settings_tab:
 		"audio":
+			if _hit(_fullscreen_rect(), p):
+				_nav_accept_settings("fullscreen")
+				return
 			for kind in ["sfx", "music"]:
 				if _hit(_settings_slider_hit(kind), p):
 					drag_slider = kind
@@ -704,6 +716,14 @@ func _commit_slider(kind: String) -> void:
 # 方向键在域内做「空间导航」（同向候选按 距离 + 1.6×横向偏移 打分），
 # 没有同向候选时只在垂直/水平重叠的同一行/列里回绕。
 
+func open_pause_settings() -> void:
+	settings_only = true
+	_started = false
+	visible = true
+	move_to_front()
+	_open_settings()
+	_sync_nav()
+
 func _open_settings() -> void:
 	settings_open = true
 	if _is_versus_lobby():
@@ -766,6 +786,7 @@ func _focus_items() -> Array:
 			_:
 				out.append({"key": "slider:sfx", "rect": _settings_slider_hit("sfx")})
 				out.append({"key": "slider:music", "rect": _settings_slider_hit("music")})
+				out.append({"key": "fullscreen", "rect": _fullscreen_rect()})
 		out.append({"key": "done", "rect": _settings_done_rect()})
 		return out
 	out.append({"key": "replay", "rect": _replay_rect()})
@@ -820,6 +841,12 @@ func _close_settings() -> void:
 	settings_open = false
 	capture_target = {}
 	_sync_nav()
+	if settings_only:
+		settings_only = false
+		_started = true
+		visible = false
+		settings_closed.emit()
+		return
 	if _is_versus_lobby():
 		versus_lobby.model.refresh_routes()
 		versus_lobby.prime_inputs()
@@ -1003,6 +1030,9 @@ func _nav_accept_settings(key: String) -> void:
 	var parts := key.split(":")
 	if key == "done":
 		_close_settings()
+	elif key == "fullscreen":
+		InputSettings.set_fullscreen(not InputSettings.fullscreen_enabled())
+		_ui_click()
 	elif key.begins_with("tab:"):
 		var i := int(parts[1])
 		if i >= 0 and i < SETTINGS_TABS.size():
@@ -1092,6 +1122,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		if key == KEY_ESCAPE:
 			_close_settings()
 			nav_mode = true
+			get_viewport().set_input_as_handled()
 		return
 	if key == KEY_ESCAPE:
 		if step == "chars":
@@ -1147,6 +1178,11 @@ func _confirm() -> void:
 # ---------------- 绘制 ----------------
 
 func _draw() -> void:
+	if settings_only:
+		_draw_settings()
+		_draw_focus_ring()
+		_draw_toast()
+		return
 	_draw_background()
 	if _is_versus_lobby():
 		if settings_open:
@@ -1469,20 +1505,20 @@ func _draw_poster() -> void:
 	UIDraw.tag(self, String(v["role"]) + "系", x + 20, y + 45, {"size": 11, "family": "cn",
 		"fill": v["accent"], "fg": UIDraw.INK, "padX": 6, "h": 14, "align": "left",
 		"stroke": UIDraw.INK, "lw": 1})
-	UIDraw.text(self, cfg["name"], x + 20, y + 90, {"size": 44, "weight": 900, "family": "cn",
+	UIDraw.text(self, cfg["name"], x + 20, y + 84, {"size": 40, "weight": 900, "family": "cn",
 		"fill": UIDraw.CREAM, "shadow": v["color"], "shadowX": 3, "shadowY": 3})
 	var skill_label := ("被动 · " if bool(data.get("passive", false)) else "") + String(data["name"])
-	UIDraw.text(self, skill_label, x + 22, y + 118, {"size": 14, "weight": 900, "family": "cn", "fill": v["color"]})
-	draw_rect(Rect2(x + 22, y + 124, minf(UIDraw.measure(skill_label, 14, 900, "cn"), 300), 3), v["color"], true, -1.0, true)
-	UIDraw.wrap(self, data["desc"], x + 22, y + 143, 340, 12, 17,
+	UIDraw.text(self, skill_label, x + 22, y + 126, {"size": 14, "weight": 900, "family": "cn", "fill": v["color"]})
+	draw_rect(Rect2(x + 22, y + 138, minf(UIDraw.measure(skill_label, 14, 900, "cn"), 300), 2), v["color"], true, -1.0, true)
+	UIDraw.wrap(self, data["desc"], x + 22, y + 156, 300, 12, 17,
 		Color(245 / 255.0, 235 / 255.0, 216 / 255.0, 0.72), 2, 500, "cn")
 	if bool(data.get("passive", false)):
 		UIDraw.text(self, "放弹%d次或%s通灵" % [int(data["bombs_to_evolve"]), "击倒" if int(_mode()["players"]) == 2 else "击杀"],
-			x + 22, y + 182, {"size": 11, "weight": 700, "family": "cn",
+			x + 22, y + 196, {"size": 11, "weight": 700, "family": "cn",
 			"fill": Color(245 / 255.0, 235 / 255.0, 216 / 255.0, 0.55)})
 	if cfg.has("intro"):
-		UIDraw.text(self, "LORE", x + 22, y + 202, {"size": 11, "weight": 700, "family": "mono", "fill": v["accent"]})
-		_draw_lore(String(cfg["intro"]), x + 66, y + 202, 290)
+		UIDraw.text(self, "LORE", x + 22, y + 216, {"size": 11, "weight": 700, "family": "mono", "fill": v["accent"]})
+		_draw_lore(String(cfg["intro"]), x + 66, y + 216, 260)
 	var key_text := "被动"
 	if not bool(data.get("passive", false)):
 		# 键位跟着设置走：改绑之后海报上的技能键提示同步更新。
@@ -1493,11 +1529,11 @@ func _draw_poster() -> void:
 			var labels := InputSettings.pad_labels(InputSettings.action_for(slot, "skill"))
 			key_text = String(labels[0]) if not labels.is_empty() else "未绑定"
 	var key_width := maxf(44, UIDraw.measure(key_text, 11, 700, "mono") + 12)
-	UIDraw.keycap(self, key_text, x + 22, y + 226, key_width, 20, v["color"], UIDraw.INK)
+	UIDraw.keycap(self, key_text, x + 22, y + 240, key_width, 20, v["color"], UIDraw.INK)
 	UIDraw.text(self, ("6 格通灵" if bool(data.get("passive", false)) else "冷却%s秒" % str(data["cd"])),
-		x + 34 + key_width, y + 236, {"size": 11, "weight": 700, "family": "mono",
+		x + 34 + key_width, y + 250, {"size": 11, "weight": 700, "family": "mono",
 		"fill": Color(245 / 255.0, 235 / 255.0, 216 / 255.0, 0.55)})
-	UIDraw.text(self, "BOMBIT / CHARACTER FILE", x + 22, y + 263,
+	UIDraw.text(self, "BOMBIT / CHARACTER FILE", x + 22, y + 273,
 		{"size": 11, "weight": 700, "family": "mono", "fill": Color(245 / 255.0, 235 / 255.0, 216 / 255.0, 0.35)})
 	var deco := [
 		[x + 340, y + 46, 6.0, UIDraw.YELLOW, 0.2],
@@ -1724,8 +1760,6 @@ func _draw_footer() -> void:
 		"方向键 选择　·　ENTER 确认　·　" + ("1 / 2 切换玩家　·　" if int(_mode()["players"]) == 2 else "") + "ESC 返回"
 	UIDraw.text(self, hint, Cfg.VIEW_W * 0.5, Cfg.VIEW_H - 39,
 		{"size": 11, "weight": 700, "family": "mono", "fill": UIDraw.INK, "alpha": 0.58, "align": "center"})
-	UIDraw.text(self, "v2.3-godot　·　作者：初霁", Cfg.VIEW_W * 0.5, Cfg.VIEW_H - 17,
-		{"size": 11, "weight": 500, "family": "cn", "fill": UIDraw.INK, "alpha": 0.45, "align": "center"})
 	for i in 22:
 		var bw := 2.0 if i % 4 == 0 else 1.0
 		draw_rect(Rect2(634 + i * 3, Cfg.VIEW_H - 23, bw, 11),
@@ -1810,6 +1844,18 @@ func _draw_settings_audio() -> void:
 		UIDraw.tag(self, "已静音 / MUTED", bx + float(SETTINGS_BODY["w"]) - 8, by + 210,
 			{"size": 11, "family": "mono", "fill": UIDraw.PINK, "fg": UIDraw.INK,
 			"padX": 6, "h": 14, "align": "right", "stroke": UIDraw.INK, "lw": 1})
+	var r := _fullscreen_rect()
+	var enabled := InputSettings.fullscreen_enabled()
+	UIDraw.text(self, "DISPLAY / 画面", bx + 8, by + 260,
+		{"size": 11, "family": "mono", "fill": UIDraw.INK})
+	UIDraw.panel(self, r.position.x, r.position.y, r.size.x, r.size.y,
+		{"fill": UIDraw.YELLOW if _h("fullscreen") else UIDraw.PAPER, "stroke": UIDraw.INK, "lw": 2, "r": 3})
+	UIDraw.text(self, "全屏显示", r.position.x + 14, r.get_center().y,
+		{"size": 15, "fill": UIDraw.INK})
+	UIDraw.text(self, "开启" if enabled else "关闭", r.end.x - 16, r.get_center().y,
+		{"size": 14, "fill": UIDraw.INK, "align": "right"})
+	UIDraw.text(self, "F11 快速切换 · 自动适应屏幕，保持游戏比例", bx + 8, by + 358,
+		{"size": 11, "weight": 500, "fill": UIDraw.INK})
 
 func _draw_slider_row(kind: String, value: float, color: Color, label: String, sub: String) -> void:
 	var r := _settings_slider_rect(kind)
