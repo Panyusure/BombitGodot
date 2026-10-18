@@ -128,8 +128,17 @@ func _ready() -> void:
 	_logger_attached = true
 	## Routed to the editor's Output panel via Godot's remote-stdout
 	## forwarder — handy when diagnosing why capture timed out.
-	print("[godot_ai game_helper] registered mcp capture (debugger active=%s, logger=%s)"
-		% [EngineDebugger.is_active(), _logger_attached])
+	## CLI/MCP runs speak JSON on stdout; keep that channel clean.
+	var cli_stdio := false
+	for arg in OS.get_cmdline_args():
+		if String(arg).contains("BombitCLI.gd"):
+			cli_stdio = true
+	for arg in OS.get_cmdline_user_args():
+		if String(arg) == "--mcp" or String(arg) == "--cli" or String(arg) == "--serve" or String(arg) == "serve":
+			cli_stdio = true
+	if not cli_stdio:
+		print("[godot_ai game_helper] registered mcp capture (debugger active=%s, logger=%s)"
+			% [EngineDebugger.is_active(), _logger_attached])
 	## Boot beacon so the editor side can confirm the autoload ran even
 	## if no screenshot was ever requested.
 	if EngineDebugger.is_active():

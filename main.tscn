@@ -1,10 +1,52 @@
-[gd_scene load_steps=2 format=3 uid="uid://syrhny3ehsio"]
+[gd_scene format=3 uid="uid://syrhny3ehsio"]
 
-[ext_resource type="Texture2D" path="res://icon.svg" id="1_icon"]
+[ext_resource type="Script" uid="uid://f12ct713uim2" path="res://scripts/Main.gd" id="1_main"]
+[ext_resource type="Script" uid="uid://cywfu8gabx4yw" path="res://scripts/Board.gd" id="2_board"]
+[ext_resource type="Script" uid="uid://cmqymolcin4oc" path="res://scripts/Hud.gd" id="3_hud"]
+[ext_resource type="Script" uid="uid://be1aoal5vc37b" path="res://scripts/Menu.gd" id="4_menu"]
+[ext_resource type="Script" uid="uid://blk50k38e27l6" path="res://scripts/Overlay.gd" id="5_overlay"]
+[ext_resource type="Script" path="res://scripts/ReplayUI.gd" id="6_7mycd"]
 
-[node name="Main" type="Node2D"]
+[node name="Main" type="Node2D" unique_id=626072636]
+script = ExtResource("1_main")
 
-[node name="Camera2D" type="Camera2D" parent="."]
+[node name="Board" type="Node2D" parent="." unique_id=432271943]
+position = Vector2(0, 72)
+script = ExtResource("2_board")
 
-[node name="TestSprite" type="Sprite2D" parent="."]
-texture = ExtResource("1_icon")
+[node name="Actors" type="Node2D" parent="." unique_id=97358944]
+position = Vector2(0, 72)
+
+[node name="UILayer" type="CanvasLayer" parent="." unique_id=727723309]
+
+[node name="Hud" type="Control" parent="UILayer" unique_id=1475642585]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("3_hud")
+
+[node name="Menu" type="Control" parent="UILayer" unique_id=408251194]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("4_menu")
+
+[node name="Overlay" type="Control" parent="UILayer" unique_id=597396040]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("5_overlay")
+
+[node name="Replay" type="Control" parent="UILayer" unique_id=823486015]
+layout_mode = 3
+anchors_preset = 0
+script = ExtResource("6_7mycd")

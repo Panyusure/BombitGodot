@@ -1,0 +1,42 @@
+Q版泡泡堂 · BombIt（Godot 移植版）v1.0
+====================================
+
+把 HTML5 Canvas 版《Q版泡泡堂 BombIt v2.3》完整移植到 Godot 4.7 的 Windows 绿色包。
+
+【运行】
+双击「启动游戏.bat」，或直接双击 BombitGodot.exe。
+BombitGodot.exe 与 BombitGodot.pck 必须放在同一目录，缺一不可。
+首次运行若被 SmartScreen 拦截，选「更多信息 → 仍要运行」。
+
+【操作】
+单人（闯关 / 拆砖）：方向键或 WASD 移动，空格放炸弹，Q 技能。
+双人：1P 方向键 / Enter 放弹 / 右 Shift 技能；2P WASD / 空格 / F。
+Esc 或 P 暂停，R 重开，M 静音，F11 全屏。
+菜单与结算界面可直接用鼠标点，Enter 确认。
+
+【内容】
+三种模式：10 关闯关（第 5、10 关鲁鲁旦 BOSS）、180 秒计时拆砖、双人同屏对战。
+界面与场景按原作 Motion UI 与 sprites.js 绘制代码重制：模式卡 / 精灵海报 / HUD / 暂停 / 结算 / 三主题场景美术。
+六位精灵与各自技能；七种道具；三种随机主题（森林 / 工厂 / 游乐园）；
+小怪 AI、BOSS 三阶段与毒刺、传送带与木马环道；完整菜单 / HUD / 暂停 / 结算 / 配乐音效。
+
+【CLI / MCP / 回放】
+双击「启动CLI.bat」进入人类 CLI（w/a/s/d、b、q、wait、look、new、quit）。
+MCP 客户端配置见 mcp/bombit-mcp.json，命令行入口为 BombitGodot.console.exe。
+菜单右上角「对局回放」可播放/暂停、倍速、逐帧、拖动定位；支持 Godot 验证回放与原作兼容回放。
+
+【文件】
+BombitGodot.exe           游戏主程序（104 MB）
+BombitGodot.pck           游戏资源包（46 MB）
+BombitGodot.console.exe   CLI / MCP 控制台入口
+bombit-mcp.bat            MCP stdio 启动器
+启动CLI.bat               人类 CLI 入口
+mcp/bombit-mcp.json       MCP 客户端配置样例
+README.md                 完整说明（含界面预览，预览在 docs/screenshots/）
+docs/Godot-CLI与MCP.md    CLI / MCP / 回放详细文档
+docs/screenshots/         界面截图
+本文件                    快速上手
+
+【说明】
+本项目仅供个人学习与娱乐使用，请勿商用盈利。
+角色与敌人美术、配乐取材自《奥奇传说》并经原作者（初霁）重制，权利归原权利人所有。

@@ -2,16 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://c7g7vhkag75xn"
-path="res://.godot/imported/BombIt_MotionID_Poster.png-d6f6d90c38875fca8534ad3c451af424.ctex"
+uid="uid://64xoicsvoxwl"
+path="res://.godot/imported/boss.png-927d7237137444c9791f72cee1e336c2.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://BombIt_MotionID_Poster.png"
-dest_files=["res://.godot/imported/BombIt_MotionID_Poster.png-d6f6d90c38875fca8534ad3c451af424.ctex"]
+source_file="res://docs/screenshots/boss.png"
+dest_files=["res://.godot/imported/boss.png-927d7237137444c9791f72cee1e336c2.ctex"]
 
 [params]
 

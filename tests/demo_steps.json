@@ -1,0 +1,16 @@
+﻿[
+ {"move":"down","frames":36},
+ {"move":"right","frames":36},
+ {"bomb":true,"frames":1},
+ {"wait":true,"frames":60},
+ {"wait":true,"frames":12},
+ {"move":"up","frames":24},
+ {"move":"left","frames":24},
+ {"move":"down","frames":24},
+ {"move":"right","frames":24},
+ {"wait":true,"frames":48},
+ {"move":"up","frames":24},
+ {"move":"left","frames":36},
+ {"bomb":true,"frames":1},
+ {"wait":true,"frames":60}
+]

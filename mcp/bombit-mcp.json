@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "bombit": {
+      "command": "E:\\BombitGodot\\build\\windows\\BombitGodot.console.exe",
+      "args": [
+        "--headless",
+        "--no-header",
+        "--",
+        "--mcp"
+      ]
+    }
+  }
+}
