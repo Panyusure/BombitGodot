@@ -61,7 +61,57 @@ func _ready() -> void:
 func setup(m: Node) -> void:
 	main = m
 
+var _pad_prev := {}
+var _pad_direction := ""
+var _pad_repeat := 0.0
+
+func _sync_pad() -> void:
+	_pad_prev = InputSettings.poll_nav(false)
+	_pad_direction = ""
+	_pad_repeat = 0.0
+
+func _process(delta: float) -> void:
+	if not visible or (_dialog != null and _dialog.visible):
+		_sync_pad()
+		return
+	var nav := InputSettings.poll_nav(false)
+	var direction := ""
+	for name in ["up", "down", "left", "right"]:
+		if nav[name]:
+			direction = name
+			break
+	_pad_repeat -= delta
+	var move := not direction.is_empty() and (direction != _pad_direction or _pad_repeat <= 0.0)
+	if move:
+		_pad_repeat = 0.35 if direction != _pad_direction else 0.12
+		if mode == "browse":
+			var amount := -1 if direction == "up" else (1 if direction == "down" else (-5 if direction == "left" else 5))
+			selected = clampi(selected + amount, 0, maxi(0, files.size() - 1))
+			page = selected / 5
+		elif mode == "play":
+			if direction in ["left", "right"]:
+				_request_seek(_current_frame() + (-60 if direction == "left" else 60))
+			else:
+				_cycle_speed(1 if direction == "up" else -1)
+	_pad_direction = direction
+	if nav["accept"] and not _pad_prev.get("accept", false):
+		if mode == "browse":
+			_load_selected()
+		elif mode == "play" and not seeking:
+			playing = not playing
+	if nav["cancel"] and not _pad_prev.get("cancel", false):
+		if mode == "browse":
+			main.exit_replay()
+		elif seeking:
+			_finish_seek()
+		else:
+			_go_browser()
+	_pad_prev = nav
+	if move or nav["accept"] or nav["cancel"]:
+		queue_redraw()
+
 func open_browser() -> void:
+	_sync_pad()
 	visible = true
 	mode = "browse"
 	playing = false
@@ -103,12 +153,12 @@ func _draw_browser() -> void:
 	draw_rect(Rect2(0, 0, 720, 696), UIDraw.PAPER, true, -1.0, true)
 	UIDraw.dots(self, 0, 0, 720, 696, UIDraw.INK, 0.05, 14)
 	draw_rect(Rect2(0, 0, 720, 50), UIDraw.INK, true, -1.0, true)
-	UIDraw.text(self, "BOMBIT  /  MATCH ARCHIVE", 20, 25, {"size": 8, "family": "mono", "fill": UIDraw.CREAM})
-	UIDraw.text(self, "MOTION UI  /  2026", 700, 25, {"size": 7, "family": "mono", "fill": Color(245, 235, 216, 0.55), "align": "right"})
+	UIDraw.text(self, "BOMBIT  /  MATCH ARCHIVE", 20, 25, {"size": 11, "family": "mono", "fill": UIDraw.CREAM})
+	UIDraw.text(self, "MOTION UI  /  2026", 700, 25, {"size": 11, "family": "mono", "fill": Color(245, 235, 216, 0.55), "align": "right"})
 	UIDraw.text(self, "对局回放", 24, 92, {"size": 30, "weight": 900, "fill": UIDraw.INK,
 		"shadow": UIDraw.ORANGE, "shadowX": 3, "shadowY": 3})
 	UIDraw.text(self, "REPLAY ARCHIVE  /  可观看、逐帧检查、拖动定位", 24, 122,
-		{"size": 9, "family": "mono", "fill": UIDraw.MUTED})
+		{"size": 11, "family": "mono", "fill": UIDraw.MUTED})
 	var card_x = 24.0
 	var card_y = 140.0
 	var card_w = 672.0
@@ -144,13 +194,13 @@ func _draw_browser() -> void:
 			var nm = String(entry.get("name", "replay"))
 			if nm.length() > 48:
 				nm = nm.substr(0, 47) + "…"
-			UIDraw.text(self, nm, card_x + 30, ry + 22, {"size": 10, "family": "mono", "fill": title_color})
+			UIDraw.text(self, nm, card_x + 30, ry + 22, {"size": 11, "family": "mono", "fill": title_color})
 			var meta = "%s  /  %s  /  %s  /  %d actions" % [String(entry.get("mode", "")).to_upper(),
 				String(entry.get("agent", "unknown")), String(entry.get("outcome", "?")), int(entry.get("actions", 0))]
-			UIDraw.text(self, meta, card_x + 30, ry + 44, {"size": 7, "family": "mono", "fill": sub_color})
+			UIDraw.text(self, meta, card_x + 30, ry + 44, {"size": 11, "family": "mono", "fill": sub_color})
 			var fmt = "GODOT" if String(entry.get("format", "")) == Core.REPLAY_FORMAT else "JS COMPAT"
 			UIDraw.tag(self, fmt, card_x + card_w - 42, ry + 14, {
-				"size": 6, "family": "mono", "fill": UIDraw.GREEN if fmt == "GODOT" else UIDraw.YELLOW,
+				"size": 11, "family": "mono", "fill": UIDraw.GREEN if fmt == "GODOT" else UIDraw.YELLOW,
 				"fg": UIDraw.INK, "padX": 6, "h": 14, "align": "right",
 				"stroke": UIDraw.INK, "lw": 1,
 			})
@@ -159,12 +209,12 @@ func _draw_browser() -> void:
 		var m: Dictionary = files[selected]
 		var meta_y = card_y + 24 + rows_visible * 72 + 6
 		UIDraw.text(self, "SELECTED  /  %s" % String(m.get("name", "")), card_x + 22, meta_y,
-			{"size": 7, "family": "mono", "fill": UIDraw.MUTED})
+			{"size": 11, "family": "mono", "fill": UIDraw.MUTED})
 		var cinfo = "%s  ·  %s  ·  %s  ·  %s" % [String(m.get("mode", "")), ", ".join(m.get("characters", [])),
 			String(m.get("outcome", "")), String(m.get("startedAt", ""))]
-		UIDraw.text(self, cinfo, card_x + 22, meta_y + 22, {"size": 8, "fill": UIDraw.INK})
+		UIDraw.text(self, cinfo, card_x + 22, meta_y + 22, {"size": 11, "fill": UIDraw.INK})
 		var pager = "PAGE  %d / %d" % [page + 1, max_page + 1]
-		UIDraw.text(self, pager, card_x + card_w - 22, meta_y + 22, {"size": 7, "family": "mono",
+		UIDraw.text(self, pager, card_x + card_w - 22, meta_y + 22, {"size": 11, "family": "mono",
 			"fill": UIDraw.MUTED, "align": "right"})
 		var by = card_y + card_h - 42
 		_button(Rect2(card_x + 22, by, 50, 32), "‹", UIDraw.WHITE, UIDraw.INK, "prev")
@@ -173,7 +223,7 @@ func _draw_browser() -> void:
 		_button(Rect2(card_x + card_w - 128, by, 106, 32), "载入回放", UIDraw.YELLOW, UIDraw.INK, "load")
 	_button(Rect2(24, 638, 120, 38), "← 返回菜单", UIDraw.CREAM, UIDraw.INK, "close")
 	if error_text != "":
-		UIDraw.text(self, error_text, 160, 660, {"size": 9, "family": "mono", "fill": UIDraw.HOT})
+		UIDraw.text(self, error_text, 160, 660, {"size": 11, "family": "mono", "fill": UIDraw.HOT})
 
 func _button(r: Rect2, label: String, fill: Color, fg: Color, id: String) -> void:
 	UIDraw.panel(self, r.position.x, r.position.y, r.size.x, r.size.y, {
@@ -181,7 +231,7 @@ func _button(r: Rect2, label: String, fill: Color, fg: Color, id: String) -> voi
 		"shadow": UIDraw.INK, "shadowX": 3, "shadowY": 3,
 	})
 	UIDraw.text(self, label, r.position.x + r.size.x * 0.5, r.position.y + r.size.y * 0.5,
-		{"size": 9, "weight": 900, "fill": fg, "align": "center"})
+		{"size": 11, "weight": 900, "fill": fg, "align": "center"})
 	_hits[id] = r
 
 # ---------------------------------------------------------------- player
@@ -189,12 +239,12 @@ func _button(r: Rect2, label: String, fill: Color, fg: Color, id: String) -> voi
 func _draw_player() -> void:
 	# top bar
 	draw_rect(Rect2(0, 0, 720, 72), UIDraw.INK, true, -1.0, true)
-	UIDraw.text(self, "REPLAY  /  MOTION ARCHIVE", 18, 20, {"size": 8, "family": "mono",
+	UIDraw.text(self, "REPLAY  /  MOTION ARCHIVE", 18, 20, {"size": 11, "family": "mono",
 		"fill": Color(245, 235, 216, 0.65)})
 	var name = String(model.get("recording", {}).get("name", model.get("name", "replay")))
 	if name.length() > 44:
 		name = name.substr(0, 43) + "…"
-	UIDraw.text(self, name, 18, 47, {"size": 13, "weight": 900, "fill": UIDraw.CREAM})
+	UIDraw.text(self, name, 18, 47, {"size": 13, "weight": 900, "fill": UIDraw.CREAM, "max_width": 400})
 	var badge = "已验证"
 	var badge_col = UIDraw.GREEN
 	if compat:
@@ -203,7 +253,7 @@ func _draw_player() -> void:
 	elif not verified:
 		badge = "校验失败"
 		badge_col = UIDraw.HOT
-	UIDraw.tag(self, badge, 560, 36, {"size": 7, "family": "mono", "fill": badge_col, "fg": UIDraw.INK,
+	UIDraw.tag(self, badge, 560, 36, {"size": 11, "family": "mono", "fill": badge_col, "fg": UIDraw.INK,
 		"padX": 7, "h": 16, "align": "right", "stroke": UIDraw.INK, "lw": 1})
 	_button(Rect2(596, 18, 98, 36), "返回回放库", UIDraw.CREAM, UIDraw.INK, "browser")
 	# bottom control card
@@ -238,26 +288,26 @@ func _draw_player() -> void:
 	var cur = float(shown) / 60.0
 	var dur = float(total) / 60.0
 	UIDraw.text(self, "%s / %s" % [_duration(cur), _duration(dur)], sx + sw + 14, cy + 24,
-		{"size": 10, "family": "mono", "fill": UIDraw.INK})
+		{"size": 11, "family": "mono", "fill": UIDraw.INK})
 	UIDraw.text(self, "FRAME %d / %d" % [shown, total], sx + sw + 14, cy + 42,
-		{"size": 7, "family": "mono", "fill": UIDraw.MUTED})
+		{"size": 11, "family": "mono", "fill": UIDraw.MUTED})
 	_button(Rect2(606, cy + 17, 84, 44), "x%s" % _speed_label(), UIDraw.CYAN, UIDraw.INK, "speed")
 	if seeking:
 		var p = clampf(float(seek_state.get("frame", 0)) / float(maxi(1, seek_target)), 0.0, 1.0)
 		draw_rect(Rect2(10, cy - 20, 700, 12), UIDraw.INK, true, -1.0, true)
 		draw_rect(Rect2(10, cy - 20, 700 * p, 12), UIDraw.ORANGE, true, -1.0, true)
-		UIDraw.text(self, "定位中… %d%%" % int(p * 100), 360, cy - 26, {"size": 8, "family": "mono",
+		UIDraw.text(self, "定位中… %d%%" % int(p * 100), 360, cy - 26, {"size": 11, "family": "mono",
 			"fill": UIDraw.CREAM, "align": "center"})
 	# help line
-	var hint = "SPACE 播放/暂停  ·  ←/→ 1秒  ·  SHIFT ±5秒  ·  ↑/↓ 倍速  ·  ESC 返回"
+	var hint = "A / 空格 播放暂停 · ←→ 跳转 · ↑↓ 倍速 · B / Esc 返回"
 	draw_rect(Rect2(0, 582, 720, 22), Color(20, 16, 25, 0.72), true, -1.0, true)
-	UIDraw.text(self, hint, 360, 593, {"size": 7, "family": "mono", "fill": Color(245, 235, 216, 0.85), "align": "center"})
+	UIDraw.text(self, hint, 360, 593, {"size": 11, "family": "mono", "fill": Color(245, 235, 216, 0.85), "align": "center"})
 	var current_marker = ""
 	for mk in markers:
 		if int(mk.get("frame", 0)) <= frame:
 			current_marker = String(mk.get("label", ""))
 	UIDraw.text(self, "MARKER  /  %s" % current_marker, 20, 84,
-		{"size": 7, "family": "mono", "fill": Color(245, 235, 216, 0.6)})
+		{"size": 11, "family": "mono", "fill": Color(245, 235, 216, 0.6)})
 
 func _duration(seconds: float) -> String:
 	if seconds < 10.0:
@@ -292,7 +342,7 @@ func handle_key(event: InputEvent) -> void:
 			page = selected / 5
 			queue_redraw()
 		elif key == KEY_DOWN:
-			selected = mini(files.size() - 1, selected + 1)
+			selected = clampi(selected + 1, 0, maxi(0, files.size() - 1))
 			page = selected / 5
 			queue_redraw()
 		elif key == KEY_ENTER or key == KEY_KP_ENTER:

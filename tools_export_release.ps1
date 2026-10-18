@@ -1,23 +1,50 @@
 ﻿# 导出 Windows / Web 并刷新 dist 绿色包
+# 绿色包内容与 docs/绿色包说明.txt 的【文件】清单保持一致。
 $ErrorActionPreference = "Stop"
 $root = $PSScriptRoot
 $godot = "E:\Godot_v4.7.2-stable_win64.exe\Godot_v4.7.2-stable_win64_console.exe"
+$dist = Join-Path $root "dist\BombIt-Godot-v1.0-win64"
 
 Write-Host "[1/4] Export Windows..." -ForegroundColor Cyan
-& $godot --headless --path $root --export-release "Windows Desktop" "$root\build\windows\BombitGodot.exe"
+# godot 会往 stderr 写 CLIBOOT 之类的行；EAP=Stop 下会被当成 NativeCommandError，
+# 所以这一段临时放宽，改用退出码判定成败。
+$ErrorActionPreference = "Continue"
+& $godot --headless --path $root --export-release "Windows Desktop" "$root\build\windows\BombitGodot.exe" 2>&1 | ForEach-Object { Write-Host $_ }
+$winExit = $LASTEXITCODE
+$ErrorActionPreference = "Stop"
+if ($winExit -ne 0) { throw "Windows export failed: exit $winExit" }
 
 Write-Host "[2/4] Export Web..." -ForegroundColor Cyan
-& $godot --headless --path $root --export-release "Web" "$root\build\web\index.html"
+$ErrorActionPreference = "Continue"
+& $godot --headless --path $root --export-release "Web" "$root\build\web\index.html" 2>&1 | ForEach-Object { Write-Host $_ }
+$webExit = $LASTEXITCODE
+$ErrorActionPreference = "Stop"
+if ($webExit -ne 0) { throw "Web export failed: exit $webExit" }
 
 Write-Host "[3/4] Refresh dist..." -ForegroundColor Cyan
-$dist = Join-Path $root "dist\BombIt-Godot-v1.0-win64"
 if (Test-Path $dist) { Remove-Item $dist -Recurse -Force }
 New-Item -ItemType Directory -Path $dist | Out-Null
-Copy-Item "$root\build\windows\BombitGodot.exe", "$root\build\windows\BombitGodot.pck" $dist
-Copy-Item "$root\README.md" (Join-Path $dist "README.md")
+Copy-Item "$root\build\windows\BombitGodot.exe", "$root\build\windows\BombitGodot.pck", "$root\build\windows\BombitGodot.console.exe" $dist
+Copy-Item "$root\README.md" $dist
 Copy-Item "$root\docs\绿色包说明.txt" (Join-Path $dist "README.txt")
-New-Item -ItemType Directory -Path (Join-Path $dist "docs\screenshots") -Force | Out-Null
+Copy-Item "$root\启动CLI.bat", "$root\bombit-mcp.bat" $dist
+New-Item -ItemType Directory -Path (Join-Path $dist "docs\screenshots"), (Join-Path $dist "mcp") -Force | Out-Null
+Copy-Item "$root\docs\Godot-CLI与MCP.md", "$root\docs\迁移对照.md" (Join-Path $dist "docs")
 Copy-Item "$root\docs\screenshots\*.png" (Join-Path $dist "docs\screenshots")
+
+# MCP 样例不写死本机路径，解压到哪都能照着改。
+$mcpSample = @'
+{
+  "mcpServers": {
+    "bombit": {
+      "command": "<把这里替换成绿色包内 BombitGodot.console.exe 的完整路径>",
+      "args": ["--headless", "--no-header", "--", "--mcp"]
+    }
+  }
+}
+'@
+[System.IO.File]::WriteAllText((Join-Path $dist "mcp\bombit-mcp.json"), $mcpSample, (New-Object System.Text.UTF8Encoding($false)))
+
 Set-Content -Path (Join-Path $dist "启动游戏.bat") -Encoding ASCII -Value @'
 @echo off
 cd /d "%~dp0"

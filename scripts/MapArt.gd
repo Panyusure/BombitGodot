@@ -535,6 +535,10 @@ static func draw_flames(ci: CanvasItem, flames: Array) -> void:
 
 static func draw_items(ci: CanvasItem, items: Array, time: float) -> void:
 	for i in items.size():
+		# 防御：for 的上界只求值一次，若数组在绘制途中被外部改动（例如调试器
+		# 在 _draw 中间求值），items[i] 会越界并把整个游戏打进调试断点。
+		if i >= items.size():
+			break
 		var it: Dictionary = items[i]
 		var cx = int(it["c"]) * TILE + TILE * 0.5
 		var cy = int(it["r"]) * TILE + TILE * 0.5 + sin(time * 3.0 + i) * 3.0

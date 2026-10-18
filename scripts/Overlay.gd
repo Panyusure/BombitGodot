@@ -14,6 +14,9 @@ const PAUSE_CARD = {"w": 430.0, "h": 430.0}
 const PAUSE_BTN = {"w": 300.0, "h": 52.0, "gap": 12.0}
 const RESULT_CARD = {"w": 560.0, "h": 430.0}
 const RESULT_BTN = {"w": 210.0, "h": 52.0, "gap": 20.0}
+## 导航方向键首次重复延迟 / 之后每格间隔（与 Menu 一致）
+const NAV_FIRST_DELAY := 0.35
+const NAV_REPEAT_DELAY := 0.09
 
 var world: World = null
 var summary: Dictionary = {}
@@ -24,6 +27,12 @@ var index = 0
 var hover = -1
 var confetti: Array = []
 var _banner: Control = null
+# 手柄 / 键盘导航：nav_mode=true 时高亮来自导航（鼠标悬停让位）
+var nav_mode := false
+var nav_dir := ""
+var nav_timer := 0.0
+var nav_accept_prev := false
+var nav_cancel_prev := false
 
 func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -46,11 +55,103 @@ func _process(delta: float) -> void:
 				c["x"] = fmod(float(c["x"]) + 91.0, Cfg.VIEW_W)
 	if visible:
 		_update_hover()
+		_process_nav(delta)
 	queue_redraw()
+
+# ---------------- 手柄 / 键盘导航 ----------------
+#
+# 不新增按钮：只把已有的 3 个暂停按钮 / 简报按钮 / 结算按钮接到导航状态机上，
+# 高亮沿用原有的「选中项 = 墨色反白」，另加一圈呼吸焦点环。
+# 方向与确认交给这里（限速重复），快捷键（R / M / Esc）仍走 _unhandled_input 与 Main。
+
+func _process_nav(delta: float) -> void:
+	var nav: Dictionary = InputSettings.poll_nav()
+	var dir := ""
+	if bool(nav["up"]):
+		dir = "up"
+	elif bool(nav["down"]):
+		dir = "down"
+	elif mode == Mode.RESULT and bool(nav["left"]):
+		dir = "left"
+	elif mode == Mode.RESULT and bool(nav["right"]):
+		dir = "right"
+	if dir.is_empty():
+		nav_dir = ""
+		nav_timer = 0.0
+	elif dir != nav_dir:
+		nav_dir = dir
+		nav_timer = NAV_FIRST_DELAY
+		_nav_step(-1 if dir in ["up", "left"] else 1)
+	else:
+		nav_timer -= delta
+		if nav_timer <= 0.0:
+			nav_timer = NAV_REPEAT_DELAY
+			_nav_step(-1 if dir in ["up", "left"] else 1)
+	var acc := bool(nav["accept"])
+	if acc and not nav_accept_prev:
+		nav_mode = true
+		match mode:
+			Mode.BRIEF:
+				action.emit("start")
+			Mode.PAUSE:
+				_pause_action(index)
+			Mode.RESULT:
+				action.emit("restart" if index == 0 else "menu")
+	nav_accept_prev = acc
+	var can := bool(nav["cancel"])
+	if can and not nav_cancel_prev:
+		nav_mode = true
+		match mode:
+			Mode.BRIEF:
+				action.emit("menu")
+			Mode.PAUSE:
+				action.emit("resume")
+			Mode.RESULT:
+				action.emit("menu")
+	nav_cancel_prev = can
+
+func _nav_step(step_dir: int) -> void:
+	nav_mode = true
+	if mode == Mode.PAUSE:
+		index = (index + step_dir + 3) % 3
+	elif mode == Mode.RESULT:
+		index = (index + step_dir + 2) % 2
+
+func _sync_nav() -> void:
+	var nav := InputSettings.poll_nav()
+	nav_accept_prev = bool(nav["accept"])
+	nav_cancel_prev = bool(nav["cancel"])
+	nav_dir = ""
+	nav_timer = 0.0
+
+func _nav_ring() -> void:
+	if not nav_mode or mode == Mode.NONE:
+		return
+	var r := Rect2()
+	match mode:
+		Mode.BRIEF:
+			r = Rect2(BRIEF_BTN["x"], BRIEF_BTN["y"], BRIEF_BTN["w"], BRIEF_BTN["h"])
+		Mode.PAUSE:
+			r = _pause_btn(index)
+		Mode.RESULT:
+			r = _result_btn(index)
+		_:
+			return
+	if r.size.x <= 0.0:
+		return
+	var col := UIDraw.YELLOW
+	col.a = 0.68 + 0.32 * (0.5 + 0.5 * sin(t * 7.0))
+	UIDraw.stroke_rr(self, r.position.x - 3.0, r.position.y - 3.0,
+		r.size.x + 6.0, r.size.y + 6.0, 6.0, UIDraw.INK, 3.0)
+	UIDraw.stroke_rr(self, r.position.x - 6.0, r.position.y - 6.0,
+		r.size.x + 12.0, r.size.y + 12.0, 8.0, col, 2.0)
 
 func _update_hover() -> void:
 	hover = -1
 	if mode == Mode.NONE:
+		return
+	# 导航（手柄 / 方向键）刚操作过：鼠标悬停让位，避免两处同时高亮
+	if nav_mode:
 		return
 	var p = get_local_mouse_position()
 	if mode == Mode.BRIEF:
@@ -71,6 +172,8 @@ func _update_hover() -> void:
 func show_briefing(w: World) -> void:
 	world = w
 	mode = Mode.BRIEF
+	index = 0
+	_sync_nav()
 	appear = 0.0
 	hover = -1
 	_clear_banner()
@@ -82,6 +185,7 @@ func show_pause() -> void:
 	mode = Mode.PAUSE
 	appear = 0.0
 	index = 0
+	_sync_nav()
 	hover = -1
 	_clear_banner()
 	visible = true
@@ -91,6 +195,8 @@ func show_pause() -> void:
 func show_result(sum: Dictionary) -> void:
 	summary = sum
 	mode = Mode.RESULT
+	index = 0
+	_sync_nav()
 	appear = 0.0
 	hover = -1
 	_clear_banner()
@@ -184,9 +290,11 @@ func _gui_input(event: InputEvent) -> void:
 	if mode == Mode.NONE:
 		return
 	if event is InputEventMouseMotion:
+		nav_mode = false
 		_update_hover()
 		queue_redraw()
 	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
+		nav_mode = false
 		var p = event.position
 		if mode == Mode.BRIEF:
 			if Rect2(BRIEF_BTN["x"], BRIEF_BTN["y"], BRIEF_BTN["w"], BRIEF_BTN["h"]).has_point(p):
@@ -207,18 +315,9 @@ func _unhandled_input(event: InputEvent) -> void:
 	if not (event is InputEventKey) or not event.pressed or event.echo:
 		return
 	var key: int = event.keycode
-	if mode == Mode.BRIEF:
-		if key == KEY_ENTER or key == KEY_KP_ENTER or key == KEY_SPACE:
-			action.emit("start")
-	elif mode == Mode.PAUSE:
-		if key == KEY_DOWN or key == KEY_S:
-			index = (index + 1) % 3
-		elif key == KEY_UP or key == KEY_W:
-			index = (index + 2) % 3
-		elif key == KEY_ENTER or key == KEY_KP_ENTER or key == KEY_SPACE:
-			_pause_action(index)
-	elif mode == Mode.RESULT:
-		if key == KEY_ENTER or key == KEY_KP_ENTER or key == KEY_SPACE or key == KEY_R:
+	# 方向与确认交给 _process_nav（键盘 / 手柄同一套 + 限速重复），这里只留快捷键。
+	if mode == Mode.RESULT:
+		if key == KEY_R:
 			action.emit("restart")
 		elif key == KEY_M:
 			action.emit("menu")
@@ -241,6 +340,7 @@ func _draw() -> void:
 			_draw_pause()
 		Mode.RESULT:
 			_draw_result()
+	_nav_ring()
 
 func _draw_pause() -> void:
 	var e = appear
@@ -265,29 +365,29 @@ func _draw_pause() -> void:
 		Rect2(c.position.x, c.position.y, c.size.x, 58.0)), UIDraw.INK)
 	UIDraw.dots(self, c.position.x, c.position.y, c.size.x, 58, UIDraw.CREAM, 0.06, 12)
 	UIDraw.text(self, "PAUSED  /  TACTICAL BREAK", c.position.x + 22, c.position.y + 22,
-		{"size": 6.8, "weight": 700, "family": "mono", "fill": UIDraw.CYAN})
+		{"size": 11, "weight": 700, "family": "mono", "fill": UIDraw.CYAN})
 	UIDraw.text(self, "BATTLE LOG  /  03", c.position.x + c.size.x - 22, c.position.y + 22,
-		{"size": 6.8, "weight": 700, "family": "mono",
+		{"size": 11, "weight": 700, "family": "mono",
 		"fill": Color(245 / 255.0, 235 / 255.0, 216 / 255.0, 0.48), "align": "right"})
 	UIDraw.text(self, "战场已冻结", c.position.x + 22, c.position.y + 43,
-		{"size": 9, "weight": 700, "family": "cn",
+		{"size": 11, "weight": 700, "family": "cn",
 		"fill": Color(245 / 255.0, 235 / 255.0, 216 / 255.0, 0.7)})
 	UIDraw.text(self, "已暂停", c.position.x + 24, c.position.y + 106,
 		{"size": 38, "weight": 900, "family": "cn", "fill": UIDraw.INK,
 		"shadow": UIDraw.ORANGE, "shadowX": 3, "shadowY": 3})
 	UIDraw.text(self, "PAUSE / 战术会议", c.position.x + 26, c.position.y + 134,
-		{"size": 6.5, "weight": 700, "family": "mono",
+		{"size": 11, "weight": 700, "family": "mono",
 		"fill": Color(20 / 255.0, 16 / 255.0, 25 / 255.0, 0.42)})
 	var info = _pause_info()
 	if not info.is_empty():
 		UIDraw.text(self, info, c.position.x + 24, c.position.y + 158,
-			{"size": 9, "weight": 500, "family": "cn",
+			{"size": 11, "weight": 500, "family": "cn",
 			"fill": Color(20 / 255.0, 16 / 255.0, 25 / 255.0, 0.62)})
 	draw_line(Vector2(c.position.x + 24, c.position.y + 174),
 		Vector2(c.position.x + c.size.x - 24, c.position.y + 174),
 		Color(20 / 255.0, 16 / 255.0, 25 / 255.0, 0.16), 1.0, true)
 	UIDraw.text(self, "选择下一步 / SELECT NEXT MOVE", c.position.x + 24, c.position.y + 187,
-		{"size": 6.5, "weight": 700, "family": "mono",
+		{"size": 11, "weight": 700, "family": "mono",
 		"fill": Color(20 / 255.0, 16 / 255.0, 25 / 255.0, 0.42)})
 	UIDraw.text(self, pad2(index + 1), c.position.x + c.size.x - 24, c.position.y + 244,
 		{"size": 108, "weight": 900, "family": "impact", "fill": Color(0, 0, 0, 0),
@@ -303,8 +403,8 @@ func _draw_pause() -> void:
 	]
 	for i in 3:
 		_draw_pause_button(i, items[i])
-	UIDraw.tag(self, "↑↓ 选择　·　Enter 确认　·　Esc 继续", Cfg.VIEW_W * 0.5, Cfg.VIEW_H - 25,
-		{"size": 6.2, "weight": 700, "family": "mono", "fill": UIDraw.INK,
+	UIDraw.tag(self, "↑↓ 选择 · A / Enter 确认 · B / Esc 继续", Cfg.VIEW_W * 0.5, Cfg.VIEW_H - 25,
+		{"size": 11, "weight": 700, "family": "mono", "fill": UIDraw.INK,
 		"fg": UIDraw.CREAM, "padX": 9, "h": 18, "align": "center", "stroke": UIDraw.CREAM, "lw": 1})
 
 func _draw_pause_button(i: int, it: Dictionary) -> void:
@@ -328,10 +428,10 @@ func _draw_pause_button(i: int, it: Dictionary) -> void:
 	UIDraw.text(self, it["label"], -r.size.x * 0.5 + 42, 0,
 		{"size": 17, "weight": 900, "family": "cn", "fill": fg})
 	UIDraw.text(self, it["sub"], r.size.x * 0.5 - 42, 0,
-		{"size": 6.5, "weight": 700, "family": "mono",
-		"fill": Color(245 / 255.0, 235 / 255.0, 216 / 255.0, 0.55) if hot else Color(20 / 255.0, 16 / 255.0, 25 / 255.0, 0.5), "align": "right"})
+		{"size": 11, "weight": 700, "family": "mono",
+		"fill": Color(245 / 255.0, 235 / 255.0, 216 / 255.0, 0.55) if hot else Color(20 / 255.0, 16 / 255.0, 25 / 255.0, 0.7), "align": "right"})
 	UIDraw.text(self, it["en"], r.size.x * 0.5 - 12, 13,
-		{"size": 5, "weight": 700, "family": "mono",
+		{"size": 11, "weight": 700, "family": "mono",
 		"fill": accent if hot else Color(20 / 255.0, 16 / 255.0, 25 / 255.0, 0.35), "align": "right"})
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
@@ -420,12 +520,12 @@ func _draw_result() -> void:
 		Rect2(c.position.x, c.position.y, c.size.x, 64.0)), UIDraw.INK)
 	UIDraw.dots(self, c.position.x, c.position.y, c.size.x, 64, UIDraw.CREAM, 0.055, 12)
 	UIDraw.text(self, "MATCH REPORT  /  RESULT", c.position.x + 24, c.position.y + 22,
-		{"size": 6.8, "weight": 700, "family": "mono", "fill": UIDraw.CYAN})
+		{"size": 11, "weight": 700, "family": "mono", "fill": UIDraw.CYAN})
 	UIDraw.text(self, "BOMBIT  /  BATTLE LOG", c.position.x + c.size.x - 24, c.position.y + 22,
-		{"size": 6.8, "weight": 700, "family": "mono",
-		"fill": Color(245 / 255.0, 235 / 255.0, 216 / 255.0, 0.45), "align": "right"})
+		{"size": 11, "weight": 700, "family": "mono",
+		"fill": Color(245 / 255.0, 235 / 255.0, 216 / 255.0, 0.65), "align": "right"})
 	UIDraw.text(self, "FINAL WHISTLE  /  " + String(s.get("title", "对局结束")),
-		c.position.x + 24, c.position.y + 48, {"size": 8, "weight": 700, "family": "mono",
+		c.position.x + 24, c.position.y + 48, {"size": 11, "weight": 700, "family": "mono",
 		"fill": Color(245 / 255.0, 235 / 255.0, 216 / 255.0, 0.55)})
 	UIDraw.text(self, String(s.get("title", "对局结束")), c.position.x + 28, c.position.y + 112,
 		{"size": 40, "weight": 900, "family": "cn", "fill": UIDraw.INK,
@@ -433,7 +533,7 @@ func _draw_result() -> void:
 	var sub = String(s.get("subtitle", ""))
 	if not sub.is_empty():
 		UIDraw.text(self, sub, c.position.x + 30, c.position.y + 145,
-			{"size": 9.5, "weight": 500, "family": "cn",
+			{"size": 11, "weight": 500, "family": "cn",
 			"fill": Color(20 / 255.0, 16 / 255.0, 25 / 255.0, 0.6)})
 	# 原作 result.js:187-191：贴纸在卡片变换内 rotate(.04)，锚点是右对齐后的中心。
 	# UIDraw.tag 的 rot 分支会把画布变换重置成绝对变换，吃不到卡片缩放，所以这里自行合成。
@@ -449,21 +549,21 @@ func _draw_result() -> void:
 		"r": 3, "shadow": Color(20 / 255.0, 16 / 255.0, 25 / 255.0, 0.16), "shadowX": 3, "shadowY": 3})
 	draw_rect(Rect2(sx, sy, sw, 25), UIDraw.INK, true, -1.0, true)
 	UIDraw.text(self, "MATCH DATA  /  对局数据", sx + 12, sy + 13,
-		{"size": 6.5, "weight": 700, "family": "mono", "fill": UIDraw.CREAM})
+		{"size": 11, "weight": 700, "family": "mono", "fill": UIDraw.CREAM})
 	UIDraw.text(self, "SNAPSHOT  " + pad2(int(s.get("round", 1))), sx + sw - 12, sy + 13,
-		{"size": 6, "weight": 700, "family": "mono", "fill": UIDraw.CYAN, "align": "right"})
+		{"size": 11, "weight": 700, "family": "mono", "fill": UIDraw.CYAN, "align": "right"})
 	_draw_result_stats(sx + 16, sy + 44, sw - 32)
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
 	_draw_result_button(0, "再来一局", "Enter / R", UIDraw.YELLOW)
 	_draw_result_button(1, "返回菜单", "Esc / M", UIDraw.CREAM)
-	UIDraw.tag(self, "Enter / R 再来一局　·　Esc / M 返回菜单", Cfg.VIEW_W * 0.5, Cfg.VIEW_H - 25,
-		{"size": 6.2, "weight": 700, "family": "mono", "fill": UIDraw.INK, "fg": UIDraw.CREAM,
+	UIDraw.tag(self, "← → 选择 · A / Enter 确认 · B / Esc 返回", Cfg.VIEW_W * 0.5, Cfg.VIEW_H - 25,
+		{"size": 11, "weight": 700, "family": "mono", "fill": UIDraw.INK, "fg": UIDraw.CREAM,
 		"padX": 9, "h": 18, "align": "center", "stroke": UIDraw.CREAM, "lw": 1})
 
 func _draw_result_button(i: int, label: String, sub: String, base: Color) -> void:
 	var r = _result_btn(i)
-	var hot = hover == i
+	var hot = (nav_mode and index == i) or hover == i
 	draw_set_transform(r.position + r.size * 0.5, 0.0, Vector2(1.018 if hot else 1.0, 1.018 if hot else 1.0))
 	UIDraw.panel(self, -r.size.x * 0.5, -r.size.y * 0.5, r.size.x, r.size.y,
 		{"fill": UIDraw.INK if hot else base, "stroke": UIDraw.INK, "lw": 2, "r": 3,
@@ -475,8 +575,8 @@ func _draw_result_button(i: int, label: String, sub: String, base: Color) -> voi
 	UIDraw.play(self, -r.size.x * 0.5 + 22, 0, 10, UIDraw.YELLOW if hot else UIDraw.INK)
 	UIDraw.text(self, label, -r.size.x * 0.5 + 40, -2, {"size": 15, "weight": 900, "family": "cn",
 		"fill": UIDraw.CREAM if hot else UIDraw.INK})
-	UIDraw.text(self, sub, -r.size.x * 0.5 + 40, 15, {"size": 5.8, "weight": 700, "family": "mono",
-		"fill": Color(245 / 255.0, 235 / 255.0, 216 / 255.0, 0.5) if hot else Color(20 / 255.0, 16 / 255.0, 25 / 255.0, 0.4)})
+	UIDraw.text(self, sub, -r.size.x * 0.5 + 40, 15, {"size": 11, "weight": 700, "family": "mono",
+		"fill": Color(245 / 255.0, 235 / 255.0, 216 / 255.0, 0.7) if hot else Color(20 / 255.0, 16 / 255.0, 25 / 255.0, 0.4)})
 	UIDraw.keycap(self, "R" if i == 0 else "ESC", r.size.x * 0.5 - 44, -11, 30, 20,
 		UIDraw.YELLOW if hot else UIDraw.INK, UIDraw.INK if hot else UIDraw.CREAM)
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
@@ -523,7 +623,7 @@ func _draw_stat_col(rows: Array, x: float, y: float, w: float) -> void:
 		if i > 0:
 			draw_line(Vector2(x, yy - 12), Vector2(x + w, yy - 12),
 				Color(20 / 255.0, 16 / 255.0, 25 / 255.0, 0.09), 1.0, true)
-		UIDraw.text(self, rows[i][0], x, yy, {"size": 8.5, "weight": 500, "family": "cn",
+		UIDraw.text(self, rows[i][0], x, yy, {"size": 11, "weight": 500, "family": "cn",
 			"fill": Color(20 / 255.0, 16 / 255.0, 25 / 255.0, 0.55)})
 		UIDraw.text(self, rows[i][1], x + w, yy, {"size": 11.5, "weight": 900, "family": "mono",
 			"fill": UIDraw.INK, "align": "right"})
@@ -577,15 +677,15 @@ func _draw_briefing() -> void:
 	var level = world.match.level
 	UIDraw.text(self, "STAGE %s / %d%s" % [pad2(level), Cfg.ADVENTURE_LEVELS,
 		"  ·  FINAL" if level == Cfg.ADVENTURE_LEVELS else ""],
-		card["x"] + 22, card["y"] + 18, {"size": 7.6, "weight": 700, "family": "mono", "fill": UIDraw.CYAN})
+		card["x"] + 22, card["y"] + 18, {"size": 11, "weight": 700, "family": "mono", "fill": UIDraw.CYAN})
 	UIDraw.text(self, String(th["name"]) + (" · BOSS 战" if world.boss_battle else ""),
 		card["x"] + 22, card["y"] + 42, {"size": 26, "weight": 900, "family": "cn", "fill": UIDraw.CREAM})
 	UIDraw.text(self, th["subtitle"], card["x"] + 22, card["y"] + 61,
-		{"size": 8.6, "weight": 500, "family": "cn",
+		{"size": 11, "weight": 500, "family": "cn",
 		"fill": Color(245 / 255.0, 235 / 255.0, 216 / 255.0, 0.6)})
 	var fresh = not world.briefing_fresh.is_empty()
 	UIDraw.tag(self, "BOSS" if world.boss_battle else ("NEW ENEMY" if fresh else "REMINDER"),
-		card["x"] + card["w"] - 22, card["y"] + 24, {"size": 7.2, "family": "mono",
+		card["x"] + card["w"] - 22, card["y"] + 24, {"size": 11, "family": "mono",
 		"fill": UIDraw.HOT if world.boss_battle else UIDraw.YELLOW, "fg": UIDraw.INK,
 		"padX": 7, "h": 15, "align": "right", "stroke": UIDraw.INK, "lw": 1})
 	UIDraw.text(self, pad2(level), card["x"] + card["w"] - 22, card["y"] + 58,
@@ -615,40 +715,40 @@ func _draw_briefing() -> void:
 		UIDraw.rr_points(ax, ay, aw, ah, 4.0),
 		Rect2(ax, ay + ah - 42, aw, 42)), UIDraw.INK)
 	_draw_enemy_portrait(type_id, ax + aw * 0.5, ay + ah - 36, ax + aw * 0.5)
-	UIDraw.tag(self, "初次登场" if fresh else "本关提醒", ax + 12, ay + 15, {"size": 7.2, "family": "cn",
+	UIDraw.tag(self, "初次登场" if fresh else "本关提醒", ax + 12, ay + 15, {"size": 11, "family": "cn",
 		"fill": UIDraw.YELLOW, "fg": UIDraw.INK, "padX": 6, "h": 15, "align": "left",
 		"stroke": UIDraw.INK, "lw": 1})
 	UIDraw.text(self, info["name"], ax + 12, ay + ah - 15, {"size": 17.5, "weight": 900,
 		"family": "cn", "fill": UIDraw.CREAM})
-	UIDraw.text(self, "ENEMY FILE  /  " + ("BOSS" if world.boss_battle else "NPC"),
-		ax + aw - 12, ay + ah - 16, {"size": 6.2, "weight": 700, "family": "mono",
+	UIDraw.text(self, "BOSS" if world.boss_battle else "NPC",
+		ax + aw - 12, ay + ah - 16, {"size": 11, "weight": 700, "family": "mono",
 		"fill": Color(245 / 255.0, 235 / 255.0, 216 / 255.0, 0.55), "align": "right"})
 
 	var tx = ax + aw + 22
 	var tw = card["x"] + card["w"] - 22 - tx
-	UIDraw.text(self, "敌情档案 / THREAT PROFILE", tx, ay + 7, {"size": 7.6, "weight": 700,
+	UIDraw.text(self, "敌情档案 / THREAT PROFILE", tx, ay + 7, {"size": 11, "weight": 700,
 		"family": "mono", "fill": UIDraw.INK, "alpha": 0.45})
 	UIDraw.text(self, ("初次登场  " if fresh else "本关提醒  ") + String(info["name"]), tx, ay + 30,
 		{"size": 21, "weight": 900, "family": "cn", "fill": UIDraw.INK,
 		"shadow": UIDraw.YELLOW, "shadowX": 2, "shadowY": 2})
-	UIDraw.wrap(self, String(info.get("story", "")), tx, ay + 54, tw, 10.4, 14,
+	UIDraw.wrap(self, String(info.get("story", "")), tx, ay + 54, tw, 12, 16,
 		Color(20 / 255.0, 16 / 255.0, 25 / 255.0, 0.7), 3, 500, "cn")
 	draw_line(Vector2(tx, ay + 102), Vector2(tx + tw, ay + 102),
 		Color(20 / 255.0, 16 / 255.0, 25 / 255.0, 0.16), 1.0, true)
-	UIDraw.tag(self, "行动", tx, ay + 118, {"size": 7.6, "family": "cn", "fill": UIDraw.GREEN,
+	UIDraw.tag(self, "行动", tx, ay + 118, {"size": 11, "family": "cn", "fill": UIDraw.GREEN,
 		"fg": UIDraw.INK, "padX": 6, "h": 15, "align": "left", "stroke": UIDraw.INK, "lw": 1})
-	UIDraw.wrap(self, String(info.get("mechanic", "")), tx + 42, ay + 118, tw - 42, 9.8, 12.5,
+	UIDraw.wrap(self, String(info.get("mechanic", "")), tx + 42, ay + 118, tw - 42, 12, 16,
 		Color(20 / 255.0, 16 / 255.0, 25 / 255.0, 0.78), 2, 500, "cn")
-	UIDraw.tag(self, "攻击", tx, ay + 172, {"size": 7.6, "family": "cn", "fill": UIDraw.ORANGE,
+	UIDraw.tag(self, "攻击", tx, ay + 172, {"size": 11, "family": "cn", "fill": UIDraw.ORANGE,
 		"fg": UIDraw.INK, "padX": 6, "h": 15, "align": "left", "stroke": UIDraw.INK, "lw": 1})
-	UIDraw.wrap(self, String(info.get("damage", "")), tx + 42, ay + 172, tw - 42, 9.8, 12.5,
+	UIDraw.wrap(self, String(info.get("damage", "")), tx + 42, ay + 172, tw - 42, 12, 16,
 		Color(20 / 255.0, 16 / 255.0, 25 / 255.0, 0.78), 2, 500, "cn")
 
 	var hp = int(info["hp"])
 	UIDraw.panel(self, tx, ay + 212, tw, 40, {"fill": UIDraw.INK, "stroke": UIDraw.INK, "lw": 1.5, "r": 2})
-	UIDraw.text(self, "生命 / HP", tx + 12, ay + 224, {"size": 7, "weight": 700, "family": "mono",
+	UIDraw.text(self, "生命 / HP", tx + 12, ay + 224, {"size": 11, "weight": 700, "family": "mono",
 		"fill": Color(245 / 255.0, 235 / 255.0, 216 / 255.0, 0.55)})
-	UIDraw.text(self, str(hp), tx + tw - 12, ay + 224, {"size": 8, "weight": 900, "family": "mono",
+	UIDraw.text(self, str(hp), tx + tw - 12, ay + 224, {"size": 11, "weight": 900, "family": "mono",
 		"fill": UIDraw.YELLOW, "align": "right"})
 	var max_pips = mini(8, maxi(1, hp))
 	for i in max_pips:
@@ -669,25 +769,25 @@ func _draw_briefing() -> void:
 		Color(245 / 255.0, 235 / 255.0, 216 / 255.0, 0.14), 1.0, true)
 	draw_line(Vector2(c3 - 14, my + 12), Vector2(c3 - 14, my + mh - 12),
 		Color(245 / 255.0, 235 / 255.0, 216 / 255.0, 0.14), 1.0, true)
-	UIDraw.text(self, "本关阵容 / SQUAD", c1, my + 16, {"size": 6.8, "weight": 700,
+	UIDraw.text(self, "本关阵容 / SQUAD", c1, my + 16, {"size": 11, "weight": 700,
 		"family": "mono", "fill": UIDraw.CYAN})
 	var names: Array = []
 	for id in world.briefing_types:
 		names.append(Cfg.ENEMY_TYPES[id]["name"] if Cfg.ENEMY_TYPES.has(id) else String(id))
-	UIDraw.wrap(self, " / ".join(names), c1, my + 35, 160, 9.4, 11.5, UIDraw.CREAM, 2, 700, "cn")
-	UIDraw.text(self, "共 %d 只" % world.enemies.size(), c1, my + 70, {"size": 7.8,
+	UIDraw.wrap(self, " / ".join(names), c1, my + 35, 174, 11, 14, UIDraw.CREAM, 2, 700, "cn")
+	UIDraw.text(self, "共 %d 只" % world.enemies.size(), c1, my + 70, {"size": 11,
 		"weight": 700, "family": "mono", "fill": UIDraw.YELLOW})
-	UIDraw.text(self, "场景机制 / STAGE RULE", c2, my + 16, {"size": 6.8, "weight": 700,
+	UIDraw.text(self, "场景机制 / STAGE RULE", c2, my + 16, {"size": 11, "weight": 700,
 		"family": "mono", "fill": UIDraw.GREEN})
-	UIDraw.text(self, th["subtitle"], c2, my + 34, {"size": 9.4, "weight": 900, "family": "cn",
+	UIDraw.text(self, th["subtitle"], c2, my + 34, {"size": 11, "weight": 900, "family": "cn",
 		"fill": UIDraw.CREAM})
-	UIDraw.wrap(self, th["mechanic"], c2, my + 52, 152, 7.8, 10.5,
+	UIDraw.wrap(self, th["mechanic"], c2, my + 52, 166, 11, 14,
 		Color(245 / 255.0, 235 / 255.0, 216 / 255.0, 0.6), 2, 500, "cn")
-	UIDraw.text(self, "任务目标 / OBJECTIVE", c3, my + 16, {"size": 6.8, "weight": 700,
+	UIDraw.text(self, "任务目标 / OBJECTIVE", c3, my + 16, {"size": 11, "weight": 700,
 		"family": "mono", "fill": UIDraw.ORANGE})
 	UIDraw.text(self, "击败全部敌人", c3, my + 38, {"size": 11, "weight": 900, "family": "cn",
 		"fill": UIDraw.CREAM})
-	UIDraw.text(self, "即可过关", c3, my + 56, {"size": 7.8, "weight": 500, "family": "cn",
+	UIDraw.text(self, "即可过关", c3, my + 56, {"size": 11, "weight": 500, "family": "cn",
 		"fill": Color(245 / 255.0, 235 / 255.0, 216 / 255.0, 0.55)})
 
 	var bx = float(BRIEF_BTN["x"])
@@ -700,9 +800,9 @@ func _draw_briefing() -> void:
 	UIDraw.text(self, "开始本关", bx + 49, by + bh * 0.5, {"size": 19, "weight": 900,
 		"family": "cn", "fill": UIDraw.INK})
 	UIDraw.keycap(self, "ENTER", bx + bw - 75, by + 14, 54, 19, UIDraw.INK, UIDraw.CREAM)
-	UIDraw.text(self, "Enter / 空格 / 点击", card["x"] + card["w"] * 0.5, card["y"] + card["h"] - 20,
-		{"size": 7.2, "weight": 500, "family": "mono",
-		"fill": Color(20 / 255.0, 16 / 255.0, 25 / 255.0, 0.45), "align": "center"})
+	UIDraw.text(self, "A / Enter / 空格 / 点击", card["x"] + card["w"] * 0.5, card["y"] + card["h"] - 20,
+		{"size": 11, "weight": 500, "family": "mono",
+		"fill": Color(20 / 255.0, 16 / 255.0, 25 / 255.0, 0.65), "align": "center"})
 
 ## 关前档案的敌人立绘（原作 hud.js:512-517 调用 sprites.js 的 drawEnemy）。
 ##

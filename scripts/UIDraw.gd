@@ -53,12 +53,25 @@ static func measure(text: String, size: int, weight: int = 700, family: String =
 		return 0.0
 	return f.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, size).x
 
+## Truncate using font metrics, including the ellipsis in the width budget.
+static func fit(s: String, max_w: float, size: int, weight: int = 700, family: String = "cn") -> String:
+	if measure(s, size, weight, family) <= max_w:
+		return s
+	if measure("…", size, weight, family) > max_w:
+		return ""
+	var end := s.length()
+	while end > 0 and measure(s.substr(0, end) + "…", size, weight, family) > max_w:
+		end -= 1
+	return s.substr(0, end) + "…"
+
 static func text(ci: CanvasItem, s: String, x: float, y: float, o: Dictionary = {}) -> void:
 	if s.is_empty() or ci == null:
 		return
 	var size := int(o.get("size", 12))
 	var weight := int(o.get("weight", 700))
 	var family := String(o.get("family", "cn"))
+	if o.has("max_width"):
+		s = fit(s, float(o["max_width"]), size, weight, family)
 	var f := font(family, weight)
 	if f == null:
 		return
@@ -92,36 +105,31 @@ static func text(ci: CanvasItem, s: String, x: float, y: float, o: Dictionary = 
 static func wrap(ci: CanvasItem, s: String, x: float, y: float, max_w: float,
 		size: float, line_h: float, color: Color, max_lines: int = 0,
 		weight: int = 500, family: String = "cn") -> int:
-	var chars := s.split("")
-	var lines: Array = []
-	var line := ""
-	var f := font(family, weight)
-	if f == null:
-		return 0
-	for i in chars.size():
-		var ch: String = chars[i]
-		var test := line + ch
-		if f.get_string_size(test, HORIZONTAL_ALIGNMENT_LEFT, -1, int(size)).x > max_w and not line.is_empty():
-			lines.append(line)
-			line = ch
-			if max_lines > 0 and lines.size() >= max_lines - 1:
-				while i < chars.size() - 1:
-					var nxt := line + chars[i + 1]
-					if f.get_string_size(nxt + "…", HORIZONTAL_ALIGNMENT_LEFT, -1, int(size)).x > max_w:
-						break
-					i += 1
-					line = nxt
-				line += "…"
-				break
-		else:
-			line = test
-	if not line.is_empty():
-		lines.append(line)
+	var lines := wrap_lines(s, max_w, int(size), max_lines, weight, family)
 	for i in lines.size():
 		text(ci, lines[i], x, y + i * line_h, {
 			"size": size, "weight": weight, "family": family, "fill": color,
 		})
 	return lines.size()
+
+static func wrap_lines(s: String, max_w: float, size: int, max_lines: int = 0,
+		weight: int = 500, family: String = "cn") -> Array[String]:
+	var lines: Array[String] = []
+	var remaining := s
+	while not remaining.is_empty():
+		if max_lines > 0 and lines.size() == max_lines - 1:
+			lines.append(fit(remaining.replace("\n", " "), max_w, size, weight, family))
+			break
+		var count := 0
+		while count < remaining.length() and remaining[count] != "\n" and measure(remaining.substr(0, count + 1), size, weight, family) <= max_w:
+			count += 1
+		if count == 0 and remaining[0] != "\n":
+			count = 1
+		lines.append(fit(remaining.substr(0, count), max_w, size, weight, family))
+		if count < remaining.length() and remaining[count] == "\n":
+			count += 1
+		remaining = remaining.substr(count)
+	return lines
 
 ## ctx.arcTo / ctx.arc 的等价采样：按弓高容差自适应细分，不再是固定 5 段折线。
 ## 起点由调用方（lineTo）压入，故跳过 arc_pts 的第 0 个点。
@@ -340,7 +348,7 @@ static func keycap(ci: CanvasItem, s: String, x: float, y: float, w: float, h: f
 	# 原作：只有奶油底的键帽才描墨边；非奶油底才投影，且 shadowX 走 panel 的默认 4。
 	panel(ci, x, y, w, h, {"fill": bg, "stroke": INK if bg == CREAM else null, "lw": 1.5, "r": 3,
 		"shadow": null if bg == CREAM else Color(0, 0, 0, 0.28), "shadowX": 4, "shadowY": 2})
-	text(ci, s, x + w * 0.5, y + h * 0.5 + 0.5, {"size": int(minf(9.0, h * 0.42)),
+	text(ci, fit(s, w - 6, 11, 700, "mono"), x + w * 0.5, y + h * 0.5 + 0.5, {"size": 11,
 		"weight": 700, "family": "mono", "fill": fg, "align": "center"})
 
 static func gear(ci: CanvasItem, cx: float, cy: float, color: Color) -> void:

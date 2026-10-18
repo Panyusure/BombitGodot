@@ -42,8 +42,54 @@ func _draw() -> void:
 func _meta() -> Dictionary:
 	return MODE_META.get(world.mode, MODE_META_FALLBACK)
 
+## 该玩家最近一次实际生效的输入来源是不是手柄（InputSettings 逐帧记录）。
+func _pad(slot: String) -> bool:
+	return InputSettings.last_source(slot) == "gamepad"
+
+## 手柄放弹 / 技能按钮名跟着实际绑定走（改绑后提示同步）。
+func _pad_label(group: String, func_name: String, fallback: String) -> String:
+	var labs := InputSettings.pad_labels(InputSettings.action_for(group, func_name))
+	return String(labs[0]) if labs.size() > 0 else fallback
+
 func _dir_text() -> String:
+	if _pad("p1"):
+		return "D-pad / 左摇杆"
 	return "方向键 / WASD" if world.input_mode != "versus" else "方向键"
+
+## 顶部操作提示（绘制与取证共用同一份文本）：
+## 返回 [{"text", "y", "size", "family"}, ...]，键盘文案与移植前逐字一致。
+func hint_lines() -> Array:
+	if world == null:
+		return []
+	var dim := Color(245 / 255.0, 235 / 255.0, 216 / 255.0, 0.7)
+	var faint := Color(245 / 255.0, 235 / 255.0, 216 / 255.0, 0.36)
+	if world.input_mode == "versus":
+		var l1 := "1P：方向键 移动 · Enter 放弹"
+		if _pad("p1"):
+			l1 = "1P 摇杆移动 · %s 放弹 · %s 技能" % [
+				_pad_label("p1", "bomb", "A"), _pad_label("p1", "skill", "X")]
+		var l2 := "2P：WASD 移动 · 空格 放弹"
+		if _pad("p2"):
+			l2 = "2P 摇杆移动 · %s 放弹 · %s 技能" % [
+				_pad_label("p2", "bomb", "A"), _pad_label("p2", "skill", "X")]
+		return [
+			{"text": l1, "y": 50.0, "size": 11, "family": "cn", "fill": dim},
+			{"text": l2, "y": 62.0, "size": 11, "family": "cn", "fill": dim},
+		]
+	if _pad("p1"):
+		return [
+			{"text": "摇杆移动 · %s 放弹 · %s 技能" % [
+				_pad_label("p1", "bomb", "A"), _pad_label("p1", "skill", "X")],
+				"y": 52.0, "size": 11, "family": "cn", "fill": dim},
+			{"text": "Start 暂停 · 设置中可改键",
+				"y": 64.0, "size": 11, "family": "mono", "fill": faint},
+		]
+	return [
+		{"text": _dir_text() + " 移动　·　空格 放炸弹",
+			"y": 52.0, "size": 11, "family": "cn", "fill": dim},
+		{"text": "Esc 暂停　·　M 静音　·　Tab 备用键",
+			"y": 64.0, "size": 11, "family": "mono", "fill": faint},
+	]
 
 func _draw_top() -> void:
 	var m := _meta()
@@ -57,23 +103,14 @@ func _draw_top() -> void:
 		"stroke": Color(245 / 255.0, 235 / 255.0, 216 / 255.0, 0.055),
 		"strokeWidth": 1.3, "align": "center"})
 	UIDraw.text(self, "MODE " + String(m["no"]) + "  /  " + String(m["en"]), 16, 12,
-		{"size": 6.5, "weight": 700, "family": "mono", "fill": UIDraw.CREAM, "alpha": 0.52})
+		{"size": 11, "weight": 700, "family": "mono", "fill": UIDraw.CREAM, "alpha": 0.52})
 	UIDraw.text(self, m["title"], 14, 31, {"size": 20, "weight": 900, "family": "cn", "fill": UIDraw.CREAM})
 	draw_rect(Rect2(16, 42, 22, 2), m["color"], true, -1.0, true)
-	if world.input_mode == "versus":
-		UIDraw.text(self, "1P：方向键 移动 · Enter 放弹", 16, 50,
-			{"size": 8.8, "weight": 500, "family": "cn",
-			"fill": Color(245 / 255.0, 235 / 255.0, 216 / 255.0, 0.7)})
-		UIDraw.text(self, "2P：WASD 移动 · 空格 放弹", 16, 62,
-			{"size": 8.8, "weight": 500, "family": "cn",
-			"fill": Color(245 / 255.0, 235 / 255.0, 216 / 255.0, 0.7)})
-	else:
-		UIDraw.text(self, _dir_text() + " 移动　·　空格 放炸弹", 16, 52,
-			{"size": 9.2, "weight": 500, "family": "cn",
-			"fill": Color(245 / 255.0, 235 / 255.0, 216 / 255.0, 0.7)})
-		UIDraw.text(self, "Esc 暂停　·　M 静音　·　Tab 备用键", 16, 64,
-			{"size": 7, "weight": 500, "family": "mono",
-			"fill": Color(245 / 255.0, 235 / 255.0, 216 / 255.0, 0.36)})
+	# 提示文案跟着「该玩家最近一次真正用过的输入设备」切换：手柄→手柄文案，键盘→原文案
+	for line in hint_lines():
+		UIDraw.text(self, String(line["text"]), 16, float(line["y"]),
+			{"size": float(line["size"]), "weight": 500, "family": String(line["family"]),
+			"fill": line["fill"], "max_width": 326})
 	var right := float(Cfg.FIELD_W - 12)
 	for i in range(world.players.size() - 1, -1, -1):
 		_draw_chip(world.players[i], right, Cfg.HUD_H)
@@ -93,13 +130,13 @@ func _draw_chip(p, right: float, _h: float) -> void:
 	draw_rect(Rect2(x + tab_w, y, 6, h), color, true, -1.0, true)
 	draw_line(Vector2(x + tab_w, y), Vector2(x + tab_w, y + h), UIDraw.INK, 1.5, true)
 	UIDraw.text(self, String(p.id).to_upper(), x + tab_w * 0.5, cy,
-		{"size": 8.5 if versus else 10, "weight": 900, "family": "impact",
+		{"size": 11 if versus else 10, "weight": 900, "family": "impact",
 		"fill": UIDraw.INK, "align": "center"})
 	var name: String = p.char_name if not p.char_name.is_empty() else p.name
 	var hearts := (1 if p.alive else 0) if versus else Rules.life_count(p)
 	var dim := 1.0 if p.alive else 0.48
 	if versus:
-		UIDraw.text(self, name, x + 39, y + 14, {"size": 9.5, "weight": 900, "family": "cn",
+		UIDraw.text(self, name, x + 39, y + 14, {"size": 11, "weight": 900, "family": "cn",
 			"fill": UIDraw.INK, "alpha": dim})
 		var sy := y + 14
 		_stat("fire", x + 106, sy, str(p.power), 14, 8.5, dim)
@@ -118,7 +155,7 @@ func _draw_chip(p, right: float, _h: float) -> void:
 		if p.alive:
 			UIDraw.heart(self, x + w - 13, sy, 12, Color("FF839B"), UIDraw.INK)
 		else:
-			UIDraw.text(self, "重生中", x + w - 9, sy, {"size": 6, "weight": 700, "family": "cn",
+			UIDraw.text(self, "重生中", x + w - 9, sy, {"size": 11, "weight": 700, "family": "cn",
 				"fill": UIDraw.INK, "align": "right", "alpha": 0.55 * dim})
 	else:
 		UIDraw.text(self, name, x + 45, y + 17, {"size": 12, "weight": 900, "family": "cn",
@@ -140,7 +177,7 @@ func _draw_chip(p, right: float, _h: float) -> void:
 			sx += 26
 		if p.star_time > 0.0:
 			ItemIcons.draw(self, "star", sx, ry, 18, dim)
-			UIDraw.text(self, "%.1fs" % p.star_time, sx + 13, ry, {"size": 6.5, "weight": 700,
+			UIDraw.text(self, "%.1fs" % p.star_time, sx + 13, ry, {"size": 11, "weight": 700,
 				"family": "mono", "fill": UIDraw.INK, "alpha": 0.65 * dim})
 
 func _stat(kind: String, x: float, y: float, value: String, icon: float, fsize: float, dim: float) -> void:
@@ -158,25 +195,27 @@ func _draw_skills() -> void:
 		var info := Cfg.skill_cfg(p.asset_id)
 		var passive := bool(info.get("passive", false))
 		var key := "被动" if passive else ("F" if p.id == "p2" else ("右Shift" if world.input_mode == "versus" else "Q"))
-		var w := 192.0 if passive else 204.0
-		var height := 42.0 if passive else 36.0
+		if not passive and _pad(p.id):
+			key = _pad_label(p.id, "skill", "X")
+		var key_w := maxf(40, UIDraw.measure(key, 11, 700, "mono") + 12)
+		var w := maxf(230, key_w + 180)
+		var height := 40.0
 		var x := (Cfg.FIELD_W - w - 10) if p.id == "p2" else 10.0
-		var y := Cfg.FIELD_H - height - 8
+		var y := Cfg.FIELD_H - height - 4
 		var ready: bool = p.alive and p.skill_cd <= 0.0
 		var col: Color = info["color"]
-		var key_w := 44.0 if passive else (50.0 if world.input_mode == "versus" and p.id == "p1" else 34.0)
 		UIDraw.panel(self, x, y, w, height, {"fill": UIDraw.CREAM, "stroke": UIDraw.INK, "lw": 1.8,
 			"r": 3, "shadow": col, "shadowX": 3, "shadowY": 3})
 		UIDraw.dots(self, x, y, w, height, UIDraw.INK, 0.055, 10)
 		UIDraw.keycap(self, key, x + 7, y + 7, key_w, 18, col if ready else UIDraw.MUTED, UIDraw.INK)
-		UIDraw.text(self, info["name"], x + key_w + 16, y + 15, {"size": 10.5 if passive else 10,
-			"weight": 900, "family": "cn", "fill": UIDraw.INK})
+		UIDraw.text(self, info["name"], x + key_w + 16, y + 15, {"size": 12,
+			"weight": 900, "family": "cn", "fill": UIDraw.INK, "max_width": w - key_w - 80})
 		var state := ""
 		if passive and p.alive:
 			state = "已通灵" if p.soul_evolved else "通灵"
 		else:
 			state = "就绪" if ready else (("%ds" % ceili(p.skill_cd)) if p.alive else "等待")
-		UIDraw.text(self, state, x + w - 10, y + 14, {"size": 6.5, "weight": 700, "family": "mono",
+		UIDraw.text(self, state, x + w - 10, y + 14, {"size": 11, "weight": 700, "family": "mono",
 			"fill": UIDraw.INK if ready else UIDraw.ORANGE, "align": "right", "alpha": 0.7 if ready else 1.0})
 		if passive:
 			var bar_x := x + 8
@@ -241,29 +280,29 @@ func _draw_floating() -> void:
 	var number_size := 26 if m.mode == "dig" else (27 if m.mode == "versus" else 18)
 	var number_family := "cn" if m.mode == "adventure" else "impact"
 	var lw := UIDraw.measure(label, number_size, 900, number_family)
-	var sw := UIDraw.measure(sub, 8, 500, "cn")
-	var w := maxf(lw, sw) + 100.0
-	var h := 54.0 if not sub.is_empty() else 40.0
+	var sw := UIDraw.measure(sub, 11, 500, "cn")
+	var w := maxf(lw + 86, sw + 24)
+	var h := 40.0
 	var x := Cfg.FIELD_W * 0.5 - w * 0.5
-	var y := 5.0
+	var y := 2.0
 	UIDraw.panel(self, x, y, w, h, {"fill": UIDraw.CREAM, "stroke": UIDraw.INK, "lw": 2, "r": 3,
 		"shadow": UIDraw.ORANGE if warn else color, "shadowX": 4, "shadowY": 4})
 	UIDraw.dots(self, x, y, w, h, UIDraw.INK, 0.055, 11)
-	UIDraw.tag(self, tag, x + 10, y + 13, {"size": 6, "family": "mono",
+	UIDraw.tag(self, tag, x + 10, y + 13, {"size": 11, "family": "mono",
 		"fill": UIDraw.ORANGE if warn else color, "fg": UIDraw.INK, "padX": 5, "h": 12,
 		"align": "left", "stroke": UIDraw.INK, "lw": 1})
-	var plate_w := minf(w - 18, maxf(lw + 22, 92))
-	var plate_h := 25.0
-	var plate_x := Cfg.FIELD_W * 0.5 + 8 - plate_w * 0.5
-	var plate_y := y + (10.0 if not sub.is_empty() else (h - plate_h) * 0.5)
+	var plate_w := lw + 16
+	var plate_h := 23.0
+	var plate_x := x + w - plate_w - 6
+	var plate_y := y + 2
 	UIDraw.panel(self, plate_x, plate_y, plate_w, plate_h, {"fill": UIDraw.INK, "r": 2})
 	var label_color := Color("ff7a6b") if warn else Color.WHITE
-	UIDraw.text(self, label, Cfg.FIELD_W * 0.5 + 8, y + (22.0 if not sub.is_empty() else h * 0.5),
+	UIDraw.text(self, label, plate_x + plate_w * 0.5, y + 13,
 		{"size": number_size, "weight": 900, "family": number_family,
 		"fill": label_color, "align": "center"})
 	if not sub.is_empty():
-		UIDraw.text(self, sub, Cfg.FIELD_W * 0.5 + 8, y + 42,
-			{"size": 8, "weight": 700 if warn else 500, "family": "cn",
+		UIDraw.text(self, sub, Cfg.FIELD_W * 0.5, y + 32,
+			{"size": 11, "weight": 700 if warn else 500, "family": "cn",
 			"fill": UIDraw.ORANGE if warn else Color(20 / 255.0, 16 / 255.0, 25 / 255.0, 0.62),
 			"align": "center"})
 	if m.mode == "versus" and m.round_ends_at > 0.0 and not m.over:
@@ -280,21 +319,21 @@ func _draw_boss_bar() -> void:
 	var stage := Entities.boss_stage(boss) if boss != null else {}
 	var color: Color = stage.get("color", UIDraw.PINK) if not stage.is_empty() else UIDraw.PINK
 	var x := 208.0
-	var y := 6.0
+	var y := 2.0
 	var w := 304.0
 	var h := 43.0
 	UIDraw.panel(self, x, y, w, h, {"fill": UIDraw.CREAM, "stroke": UIDraw.INK, "lw": 2, "r": 3,
 		"shadow": color, "shadowX": 4, "shadowY": 4})
 	UIDraw.dots(self, x, y, w, h, UIDraw.INK, 0.06, 11)
-	UIDraw.tag(self, "BOSS", x + 10, y + 14, {"size": 6, "family": "mono", "fill": color,
+	UIDraw.tag(self, "BOSS", x + 10, y + 14, {"size": 11, "family": "mono", "fill": color,
 		"fg": UIDraw.INK, "padX": 5, "h": 12, "align": "left", "stroke": UIDraw.INK, "lw": 1})
 	var phase_name := "已击败"
 	if hp > 0 and not stage.is_empty():
 		phase_name = ["", "一 · 试探", "二 · 认真", "三 · 暴走"][clampi(int(stage["id"]), 1, 3)]
 	UIDraw.text(self, "鲁鲁旦 · " + phase_name + (" · 最终战" if world.match.level == Cfg.ADVENTURE_LEVELS else ""),
-		x + 56, y + 13, {"size": 7.5, "weight": 900, "family": "cn", "fill": UIDraw.INK})
+		x + 56, y + 13, {"size": 11, "weight": 900, "family": "cn", "fill": UIDraw.INK})
 	UIDraw.text(self, "%d / %d" % [hp, max_hp], x + w - 10, y + 13,
-		{"size": 7, "weight": 700, "family": "mono", "fill": UIDraw.INK, "align": "right"})
+		{"size": 11, "weight": 700, "family": "mono", "fill": UIDraw.INK, "align": "right"})
 	var segs := mini(max_hp, 12)
 	var seg_w := (w - 20.0) / segs
 	for i in segs:
@@ -314,14 +353,14 @@ func _draw_round_board(m: MatchState) -> void:
 		who = "1P"
 	elif int(m.scores["p2"]) > int(m.scores["p1"]):
 		who = "2P"
-	UIDraw.tag(self, "ROUND " + str(m.round), Cfg.FIELD_W * 0.5, cy - 38, {"size": 6,
+	UIDraw.tag(self, "ROUND " + str(m.round), Cfg.FIELD_W * 0.5, cy - 38, {"size": 11,
 		"family": "mono", "fill": UIDraw.YELLOW if not who.is_empty() else UIDraw.CREAM,
 		"fg": UIDraw.INK, "padX": 6, "h": 13, "align": "center", "stroke": UIDraw.INK, "lw": 1})
 	UIDraw.text(self, (who + " 得分！") if not who.is_empty() else "本回合结束",
 		Cfg.FIELD_W * 0.5, cy - 8, {"size": 30, "weight": 900, "family": "cn",
 		"fill": UIDraw.CREAM, "align": "center"})
 	UIDraw.text(self, "%.1f 秒后进入下一回合" % left_time, Cfg.FIELD_W * 0.5, cy + 27,
-		{"size": 9, "weight": 500, "family": "cn",
+		{"size": 11, "weight": 500, "family": "cn",
 		"fill": Color(245 / 255.0, 235 / 255.0, 216 / 255.0, 0.68), "align": "center"})
 
 func mmss(sec: float) -> String:

@@ -62,6 +62,10 @@ func _ready() -> void:
 	audio.play_music("menu")
 
 func _on_menu_start(m: String, c1: String, c2: String) -> void:
+	if state != State.MENU:
+		return
+	if m == "versus" and not menu.versus_start_authorized(c1, c2):
+		return
 	mode = m
 	p1_char = c1
 	p2_char = c2
@@ -140,6 +144,7 @@ func exit_replay() -> void:
 		audio.play_music("menu")
 
 func _start_run() -> void:
+	InputSettings.active_players = 2 if mode == "versus" else 1
 	if world != null:
 		GameEngine.clear_field(world)
 	world = GameEngine.create_world({
@@ -166,7 +171,7 @@ func _start_run() -> void:
 	_prev_skill.clear()
 	_last_dir.clear()
 	# 吃掉沿用自菜单的按键，避免开局第一帧误放炸弹
-	_read_actions()
+	_sync_action_edges()
 	_game_music(true)
 	if world.briefing:
 		state = State.BRIEFING
@@ -189,11 +194,13 @@ func _on_overlay_action(name: String) -> void:
 				world.briefing = false
 				state = State.PLAY
 				overlay.hide_overlay()
+				_sync_action_edges()
 				_game_music(true)
 		"resume":
 			if state == State.PAUSE:
 				state = State.PLAY
 				overlay.hide_overlay()
+				_sync_action_edges()
 		"restart":
 			_restart_run()
 		"menu":
@@ -235,6 +242,15 @@ func _input(event: InputEvent) -> void:
 		InputSettings.note_device(int(event.device))
 
 func _unhandled_input(event: InputEvent) -> void:
+	# 手柄 Start：暂停 / 继续（等价于键盘 Esc / P；键位捕获时 Menu 会先吃掉事件）
+	if event is InputEventJoypadButton:
+		if event.pressed and int(event.button_index) == JOY_BUTTON_START \
+				and InputSettings.controls_player(int(event.device)):
+			if state == State.PLAY:
+				_pause()
+			elif state == State.PAUSE:
+				_on_overlay_action("resume")
+		return
 	if not (event is InputEventKey) or not event.pressed or event.echo:
 		return
 	var key: int = event.keycode
@@ -255,8 +271,7 @@ func _unhandled_input(event: InputEvent) -> void:
 				audio.play_sfx("ui_move")
 		State.PAUSE:
 			if key == KEY_ESCAPE or key == KEY_P:
-				state = State.PLAY
-				overlay.hide_overlay()
+				_on_overlay_action("resume")
 			elif key == KEY_R:
 				_restart_run()
 			elif key == KEY_M:
@@ -441,6 +456,16 @@ func _read_actions() -> Dictionary:
 		else:
 			actions[p.id] = _read_player("p1", 1)
 	return actions
+
+## A/Space used to confirm a page must be released before it can place a bomb.
+func _sync_action_edges() -> void:
+	if world == null:
+		return
+	for p in world.players:
+		var profile := "versus" if mode == "versus" else ("alt" if alt_keys else "solo")
+		var keys := InputSettings.poll_player(p.id, profile)
+		_prev_bomb[p.id] = bool(keys["bomb"])
+		_prev_skill[p.id] = bool(keys["skill"])
 
 func _read_player(id: String, _slot: int) -> Dictionary:
 	# 键位分组：1P 单人=主键位（方向键/WASD），Tab=备用键位，对战=方向键+回车/Shift；

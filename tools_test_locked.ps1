@@ -45,7 +45,7 @@ while ($true) {
 
 $failed = $false
 try {
-    $suites = if ($Suite -eq 'all') { @('test_core', 'test_play', 'test_art') } else { @($Suite) }
+    $suites = if ($Suite -eq 'all') { @('test_core', 'test_play', 'test_art', 'test_input', 'test_versus_lobby') } else { @($Suite) }
     foreach ($s in $suites) {
         Write-Output "=== $s ==="
         # Do not let a native stderr line escalate into a terminating error.
@@ -57,9 +57,10 @@ try {
         if ($summary) { $summary | ForEach-Object { Write-Output $_.Trim() } }
         else { Write-Output ($out.Trim()) }
 
-        if ($out -match 'FAILURES=0') {
+        if ($out -match 'FAILURES=0' -and $out -notmatch '(?im)(SCRIPT ERROR:|Parse Error:|CHECK_FAIL=)') {
             Write-Output "RESULT $s : PASS"
         } else {
+            ($out -split "`n") | Where-Object { $_ -match '(SCRIPT ERROR:|Parse Error:|at:)' } | ForEach-Object { Write-Output $_.Trim() }
             Write-Output "RESULT $s : FAIL"
             $failed = $true
         }

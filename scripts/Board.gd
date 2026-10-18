@@ -4,7 +4,7 @@ extends Node2D
 ## 毒刺、道具、火焰、技能特效与爆炸范围。炸弹由 BombView 参与角色深度排序。
 ##
 ## 静态地图分两层缓存（细节见 MapPainter.gd）：
-##   base：地板 + 环路 + 硬墙 —— 同一关内不变，只在换关时重画
+##   base：地板 + 环路 + 硬墙 —— 换关或 BOSS 破坏硬墙时重画
 ##   dest：软砖 + 中央设施 + 灯串 —— 炸掉一块软砖只重画这一层
 ## 实测（2× 超采样，森林 52 硬墙 / 39 软砖）：整张重画 45.20ms → 炸砖只重画约 12.6ms。
 
@@ -95,16 +95,25 @@ func _draw_motes() -> void:
 		draw_circle(Vector2(xx, yy), 2.0 if i % 3 == 0 else 1.0,
 			Color(255 / 255.0, 249 / 255.0, 214 / 255.0, 0.38), true, -1.0, true)
 
-## base 只在「换关」时重画：用 map_identity（apply_level 里 +1），**不能用 map_revision**
+## 两层缓存的键。抽成静态纯函数是为了能**直接断言**「炸砖不动 base 键」——
+## headless 测试里手动发 NOTIFICATION_DRAW 并不会真的跑 _ready/_draw
+## （实测 _painter_base 仍是 null），所以断言不能建立在"绘制已经发生过"之上。
+static func layer_keys(w: World) -> Array:
+	var base := "%d:%d:%s:%d" % [w.map_identity, w.hard_revision, w.theme, w.map.size()]
+	var dest := "%d:%d:%s:%d" % [w.map_revision, w.map_identity, w.theme, w.map.size()]
+	return [base, dest]
+
+## base 在换关或硬墙变化时重画：map_identity + hard_revision，不能用 map_revision
 ## —— 后者炸一块软砖就会 +1，那就退化成整张重画了。
 func _ensure_map() -> void:
-	var bkey := "%d:%s:%d" % [world.map_identity, world.theme, world.map.size()]
+	var keys := layer_keys(world)
+	var bkey: String = keys[0]
+	var dkey: String = keys[1]
 	if bkey != _base_key:
 		_base_key = bkey
 		_painter_base.world = world
 		_painter_base.queue_redraw()
 		_vp_base.render_target_update_mode = SubViewport.UPDATE_ONCE
-	var dkey := "%d:%d:%s:%d" % [world.map_revision, world.map_identity, world.theme, world.map.size()]
 	if dkey != _dest_key:
 		_dest_key = dkey
 		_painter_dest.world = world

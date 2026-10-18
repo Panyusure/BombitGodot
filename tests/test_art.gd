@@ -17,7 +17,10 @@ func check(cond: bool, msg: String) -> void:
 	checks += 1
 	if not cond:
 		failures += 1
-		printerr("FAIL: " + msg)
+		# 前缀写成 KEY=value 才能穿过 tools_test_locked 的输出过滤器
+		# （它只回显匹配 (CHECKS|FAILURES|CHECK|PASS|FAIL)= 的行），
+		# 否则失败信息会被吞掉、只剩一个 FAILURES=4 让人猜。
+		printerr("CHECK_FAIL= " + msg)
 
 func make_world(theme: String) -> World:
 	var w = World.new()
@@ -313,6 +316,58 @@ class ArtProbe extends Node2D:
 		if fn.is_valid():
 			fn.call(self)
 
+## ---------------- 静态地图分层缓存：炸砖不该让 base 层重画 ----------------
+##
+## 这条断言保护的是一个**性能**特性而不是画面特性：Board 的两层缓存分别用
+## map_identity（换关才变）与 map_revision（炸砖就变）当键。
+## 一旦有人把 base 层也改成看 map_revision，画面完全不变、测试也不会红，
+## 但炸一块砖就会退化成整张 2× 地图重画（实测 45ms → 应约 12.6ms）。
+func test_map_layers() -> void:
+	var w = make_world("forest")
+	# 确保至少有一块软砖，不依赖 make_world 的具体布局
+	var brick := Vector2i(-1, -1)
+	for r in Cfg.ROWS:
+		for c in Cfg.COLS:
+			if Grid.at(w.map, c, r) == Cfg.T_BRICK:
+				brick = Vector2i(c, r)
+				break
+		if brick.x >= 0:
+			break
+	if brick.x < 0:
+		brick = Vector2i(2, 2)
+		w.map[brick.y * Cfg.COLS + brick.x] = Cfg.T_BRICK
+	check(brick.x >= 0, "测试地图里存在软砖")
+
+	var board_script = load("res://scripts/Board.gd")
+	var keys0: Array = board_script.layer_keys(w)
+	var base0 := String(keys0[0])
+	var dest0 := String(keys0[1])
+	check(base0 != "" and dest0 != "", "Board 两层缓存键都已生成")
+
+	var rev0: int = w.map_revision
+	check(w.set_tile(brick.x, brick.y, Cfg.T_EMPTY), "炸掉一块软砖成功")
+	check(w.map_revision != rev0, "炸砖让 map_revision 变化")
+	var keys1: Array = board_script.layer_keys(w)
+	check(String(keys1[0]) == base0,
+		"炸砖后 base 层缓存键不变（地板/硬墙不重画）")
+	check(String(keys1[1]) != dest0,
+		"炸砖后 dest 层缓存键变化（软砖重画）")
+	# Rage bombs change hard geometry as well as collision, so base must refresh.
+	var hard_cell := Vector2i(4, 4)
+	w.set_tile(hard_cell.x, hard_cell.y, Cfg.T_HARD)
+	var hard_key: String = board_script.layer_keys(w)[0]
+	check(w.set_tile(hard_cell.x, hard_cell.y, Cfg.T_EMPTY), "BOSS 硬墙被破坏")
+	check(String(board_script.layer_keys(w)[0]) != hard_key, "破坏硬墙刷新 base 层，避免画面残留墙体")
+
+	# 换关：整张地图被替换，两层都必须重画
+	var lvl = LevelGen.generate(Rng.new(7), {
+		"mode": "adventure", "spawns": w.spawns,
+		"theme": "forest", "previous_theme": ""})
+	GameEngine.apply_level(w, lvl)
+	var keys2: Array = board_script.layer_keys(w)
+	check(String(keys2[0]) != base0, "换关后 base 层缓存键变化（base 重画）")
+	check(String(keys2[1]) != String(keys1[1]), "换关后 dest 层缓存键变化（dest 重画）")
+
 func _probe_script() -> GDScript:
 	return ArtProbe
 
@@ -323,5 +378,6 @@ func _initialize() -> void:
 	test_item_icons()
 	test_entity_view()
 	test_effects()
+	test_map_layers()
 	print("ART_CHECKS=%d FAILURES=%d" % [checks, failures])
 	quit(0 if failures == 0 else 1)

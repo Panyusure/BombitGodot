@@ -49,6 +49,8 @@ var map_revision = 0
 ## map_revision 炸一块砖就会 +1，无法用来判断地板/硬墙要不要重画；
 ## Board 的静态地图 base 层靠这个计数避免每次炸砖都整张重画。
 var map_identity = 0
+## Render-only revision: rage bombs can destroy interior hard walls.
+var hard_revision = 0
 
 func emit_event(kind: String, data: Dictionary = {}) -> void:
     var e = data.duplicate()
@@ -62,9 +64,12 @@ func player_by_id(id: String):
     return null
 
 func set_tile(c: int, r: int, value: int) -> bool:
+    var previous := Grid.at(map, c, r)
     var changed = Grid.set_tile(map, c, r, value)
     if changed:
         map_revision += 1
+        if previous == Cfg.T_HARD or value == Cfg.T_HARD:
+            hard_revision += 1
     return changed
 
 func count_bricks() -> int:

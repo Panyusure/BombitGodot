@@ -71,10 +71,16 @@ const PAD_AXIS_NAMES := {
 }
 
 static var _loaded := false
+## Tests can use an isolated file without touching the player's settings.
+static var config_path := CONFIG_PATH
+static var active_players := 2
+static var _assigned_devices := {"p1": -1, "p2": -1}
+static var _lobby_binding_signatures := {"p1": "", "p2": ""}
 static var _defaults := {}          # action -> {"keys": Array[int], "pads": Array[Dictionary]}
 static var _live := {}              # 同上，当前生效的绑定
 static var _cfg := {}               # 见 _default_cfg()
 static var _seen := {}              # device -> true（含未走 joy_connection_changed 的设备）
+static var _last_source := {"p1": "keyboard", "p2": "keyboard"}
 
 
 # ==================== 生命周期 ====================
@@ -166,10 +172,14 @@ static func _pad_array(v) -> Array:
 			continue
 		var t := String(item.get("type", ""))
 		if t == "button":
-			out.append({"type": "button", "index": int(item.get("index", 0))})
+			var index := int(item.get("index", -1))
+			if index >= 0 and index < JOY_BUTTON_MAX:
+				out.append({"type": "button", "index": index})
 		elif t == "axis":
-			out.append({"type": "axis", "axis": int(item.get("axis", 0)),
-				"value": -1.0 if float(item.get("value", 1.0)) < 0.0 else 1.0})
+			var axis := int(item.get("axis", -1))
+			if axis >= 0 and axis < JOY_AXIS_MAX:
+				out.append({"type": "axis", "axis": axis,
+					"value": -1.0 if float(item.get("value", 1.0)) < 0.0 else 1.0})
 	return out
 
 
@@ -177,7 +187,7 @@ static func _pad_array(v) -> Array:
 
 static func _load_file() -> void:
 	var cf := ConfigFile.new()
-	if cf.load(CONFIG_PATH) != OK:
+	if cf.load(config_path) != OK:
 		return
 	_cfg["deadzone"] = clampf(float(cf.get_value("controller", "deadzone", DEADZONE_DEFAULT)),
 		DEADZONE_MIN, DEADZONE_MAX)
@@ -213,7 +223,7 @@ static func _save() -> void:
 	for a in names:
 		cf.set_value("keys", a, _live[a]["keys"])
 		cf.set_value("pads", a, _live[a]["pads"])
-	var err := cf.save(CONFIG_PATH)
+	var err := cf.save(config_path)
 	if err != OK:
 		push_warning("InputSettings: 写入 %s 失败（%s）" % [CONFIG_PATH, error_string(err)])
 
@@ -223,11 +233,11 @@ static func _save() -> void:
 static func _make_pad_event(pad: Dictionary) -> InputEvent:
 	if String(pad.get("type", "")) == "button":
 		var b := InputEventJoypadButton.new()
-		b.button_index = int(pad.get("index", 0))
+		b.button_index = int(pad.get("index", 0)) as JoyButton
 		b.device = -1
 		return b
 	var m := InputEventJoypadMotion.new()
-	m.axis = int(pad.get("axis", 0))
+	m.axis = int(pad.get("axis", 0)) as JoyAxis
 	m.axis_value = -1.0 if float(pad.get("value", 1.0)) < 0.0 else 1.0
 	m.device = -1
 	return m
@@ -236,6 +246,13 @@ static func _make_pad_event(pad: Dictionary) -> InputEvent:
 ## 把当前绑定写回 InputMap（别的消费者如 Input.is_action_pressed 也能用），
 ## 同时把摇杆死区同步到动作上。
 static func _apply_live() -> void:
+	for slot in SLOTS:
+		var group := "p1vs" if slot == "p1" else "p2"
+		var entries: Array = []
+		for function_name in FUNCS:
+			entries.append([_live.get(action_for(group, function_name), {}).get("keys", []),
+				_live.get(action_for(slot, function_name), {}).get("pads", [])])
+		_lobby_binding_signatures[slot] = str(entries)
 	var dz := float(_cfg["deadzone"])
 	for a in _live.keys():
 		if not InputMap.has_action(a):
@@ -244,7 +261,7 @@ static func _apply_live() -> void:
 		InputMap.action_set_deadzone(a, dz)
 		for kc in _live[a]["keys"]:
 			var k := InputEventKey.new()
-			k.keycode = int(kc)
+			k.keycode = int(kc) as Key
 			k.device = -1
 			InputMap.action_add_event(a, k)
 		for pad in _live[a]["pads"]:
@@ -265,12 +282,12 @@ static func _sync_deadzone() -> void:
 ## 已连接 + 见过的设备（MCP 注入 / 部分平台不上报的手柄也会出现在这里）。
 static func available_devices() -> Array:
 	ensure_loaded()
-	var set := {}
+	var seen_set := {}
 	for d in Input.get_connected_joypads():
-		set[int(d)] = true
+		seen_set[int(d)] = true
 	for d in _seen.keys():
-		set[int(d)] = true
-	var out := set.keys()
+		seen_set[int(d)] = true
+	var out := seen_set.keys()
 	out.sort()
 	return out
 
@@ -305,17 +322,75 @@ static func set_device(slot: String, device: int) -> void:
 ## 该玩家这一帧实际要读的手柄号；-1 = 没有可用手柄。
 static func slot_device(slot: String) -> int:
 	ensure_loaded()
-	var explicit := int(_cfg[slot]["device"])
-	if explicit >= 0:
-		return explicit
 	var devs := available_devices()
-	if slot == "p1":
-		return int(devs[0]) if devs.size() > 0 else -1
-	var idx := 1
-	# 1P 被强制键盘时手柄让给 2P，否则 2P 只有第二个手柄才自动接手。
-	if String(_cfg["p1"]["mode"]) == MODE_KEYBOARD:
-		idx = 0
-	return int(devs[idx]) if devs.size() > idx else -1
+	var assigned := {"p1": -1, "p2": -1}
+	var used: Array = []
+	# Reserve connected explicit selections before assigning automatic slots.
+	# A device belongs to only one player; duplicate legacy settings prefer 1P.
+	for s in SLOTS.slice(0, active_players):
+		if String(_cfg[s]["mode"]) == MODE_KEYBOARD:
+			continue
+		var explicit := int(_cfg[s]["device"])
+		if explicit >= 0 and devs.has(explicit) and not used.has(explicit):
+			assigned[s] = explicit
+			used.append(explicit)
+	for s in SLOTS.slice(0, active_players):
+		if String(_cfg[s]["mode"]) == MODE_KEYBOARD or int(_cfg[s]["device"]) >= 0:
+			continue
+		var previous := int(_assigned_devices.get(s, -1))
+		if devs.has(previous) and not used.has(previous):
+			assigned[s] = previous
+			used.append(previous)
+	for s in SLOTS.slice(0, active_players):
+		if String(_cfg[s]["mode"]) == MODE_KEYBOARD or int(_cfg[s]["device"]) >= 0 or int(assigned[s]) >= 0:
+			continue
+		for d in devs:
+			if not used.has(d):
+				assigned[s] = int(d)
+				used.append(d)
+				break
+	_assigned_devices = assigned
+	return int(assigned.get(slot, -1))
+
+## Lobby routing is per player. Disconnected gamepad-only slots cannot ready
+## using gameplay's keyboard fallback; they must reconnect or change settings.
+static func lobby_route(slot: String) -> Dictionary:
+	var group := "p1vs" if slot == "p1" else "p2"
+	var mode := device_mode(slot)
+	var device := slot_device(slot)
+	var keyboard := mode != MODE_GAMEPAD
+	var usable_keys := keyboard
+	for action in ["left", "right", "bomb", "skill"]:
+		usable_keys = usable_keys and not live_bindings(action_for(group, action))["keys"].is_empty()
+	var signature := "%s:%d:%s" % [mode, device, _lobby_binding_signatures[slot]]
+	return {"device_id": device, "keyboard": keyboard, "valid": device >= 0 or usable_keys,
+		"signature": signature, "mode": mode}
+
+static func poll_lobby_player(slot: String) -> Dictionary:
+	var route := lobby_route(slot)
+	var group := "p1vs" if slot == "p1" else "p2"
+	var out := {"left": false, "right": false, "up": false, "down": false,
+		"accept": false, "cancel": false, "start": false}
+	if bool(route["keyboard"]):
+		for direction in ["left", "right", "up", "down"]:
+			out[direction] = _keys_pressed(group, direction)
+		out["accept"] = _keys_pressed(group, "bomb")
+		out["cancel"] = _keys_pressed(group, "skill")
+	var device := int(route["device_id"])
+	if device >= 0:
+		for direction in ["left", "right", "up", "down"]:
+			out[direction] = out[direction] or _pad_pressed(slot, direction, device)
+		out["accept"] = out["accept"] or Input.is_joy_button_pressed(device, JOY_BUTTON_A)
+		out["cancel"] = out["cancel"] or Input.is_joy_button_pressed(device, JOY_BUTTON_B) or Input.is_joy_button_pressed(device, JOY_BUTTON_BACK)
+		out["start"] = Input.is_joy_button_pressed(device, JOY_BUTTON_START)
+	return out
+
+
+static func controls_player(device: int) -> bool:
+	for slot in SLOTS.slice(0, active_players):
+		if slot_device(slot) == device:
+			return true
+	return false
 
 
 static func device_name(device: int) -> String:
@@ -390,7 +465,7 @@ static func set_audio_value(kind: String, value: float) -> void:
 ## 输入反馈：放弹 / 技能按下时的一次短震动。没手柄或不支持震动时静默跳过。
 static func pulse(slot: String, kind: String) -> void:
 	ensure_loaded()
-	if not bool(_cfg["rumble"]):
+	if not bool(_cfg["rumble"]) or last_source(slot) != "gamepad":
 		return
 	var dev := slot_device(slot)
 	if dev < 0 or not Input.has_joy_vibration(dev):
@@ -410,16 +485,94 @@ static func poll_player(slot: String, profile: String) -> Dictionary:
 	var pad_group := slot
 	var mode := String(_cfg[slot]["mode"])
 	var dev := slot_device(slot)
-	var use_kb := mode != MODE_GAMEPAD
+	# A disconnected gamepad must not leave a player unable to move or recover.
+	var use_kb := mode != MODE_GAMEPAD or dev < 0
 	var use_pad: bool = mode != MODE_KEYBOARD and dev >= 0
 	var out := {}
 	for f in FUNCS:
-		var on := false
-		if use_kb and _keys_pressed(kb_group, f):
-			on = true
-		elif use_pad and _pad_pressed(pad_group, f, dev):
-			on = true
-		out[f] = on
+		var kb_on: bool = use_kb and _keys_pressed(kb_group, f)
+		var pad_on: bool = use_pad and _pad_pressed(pad_group, f, dev)
+		if kb_on:
+			_last_source[slot] = "keyboard"
+		if pad_on:
+			_last_source[slot] = "gamepad"
+		out[f] = kb_on or pad_on
+	return out
+
+
+## 该玩家最近一次实际生效的输入来源："keyboard" 或 "gamepad"（HUD 提示用）。
+static func last_source(slot: String) -> String:
+	ensure_loaded()
+	if slot_device(slot) < 0 or device_mode(slot) == MODE_KEYBOARD:
+		return "keyboard"
+	if device_mode(slot) == MODE_GAMEPAD:
+		return "gamepad"
+	return String(_last_source.get(slot, "keyboard"))
+
+
+# ==================== 菜单导航 ====================
+
+## 菜单导航优先玩家已分配的手柄。键盘专用模式仍允许用手柄操作菜单。
+static func nav_device() -> int:
+	ensure_loaded()
+	for slot in SLOTS:
+		if String(_cfg[slot]["mode"]) == MODE_KEYBOARD:
+			continue
+		var d := slot_device(slot)
+		if d >= 0:
+			return d
+	# Navigation stays available even when gameplay is configured for keyboard.
+	var devs := available_devices()
+	return int(devs[0]) if not devs.is_empty() else -1
+
+
+static func nav_gamepad_enabled() -> bool:
+	return nav_device() >= 0
+
+
+## 菜单允许所有连接手柄导航，摇杆复用与游戏一致的 deadzone。
+## 回放界面用 include_keyboard=false，避免与已有键盘事件处理重复。
+static func poll_nav(include_keyboard: bool = true) -> Dictionary:
+	ensure_loaded()
+	var out := {"up": false, "down": false, "left": false, "right": false,
+		"accept": false, "cancel": false}
+	var pad_used := false
+	for dev in available_devices():
+		var dz := float(_cfg["deadzone"])
+		var ax := Input.get_joy_axis(dev, JOY_AXIS_LEFT_X)
+		var ay := Input.get_joy_axis(dev, JOY_AXIS_LEFT_Y)
+		out["left"] = out["left"] or Input.is_joy_button_pressed(dev, JOY_BUTTON_DPAD_LEFT) or ax <= -dz
+		out["right"] = out["right"] or Input.is_joy_button_pressed(dev, JOY_BUTTON_DPAD_RIGHT) or ax >= dz
+		out["up"] = out["up"] or Input.is_joy_button_pressed(dev, JOY_BUTTON_DPAD_UP) or ay <= -dz
+		out["down"] = out["down"] or Input.is_joy_button_pressed(dev, JOY_BUTTON_DPAD_DOWN) or ay >= dz
+		out["accept"] = out["accept"] or Input.is_joy_button_pressed(dev, JOY_BUTTON_A)
+		out["cancel"] = out["cancel"] or Input.is_joy_button_pressed(dev, JOY_BUTTON_B) or Input.is_joy_button_pressed(dev, JOY_BUTTON_BACK)
+		pad_used = bool(out["up"]) or bool(out["down"]) or bool(out["left"]) \
+			or bool(out["right"]) or bool(out["accept"]) or bool(out["cancel"])
+	var kb_used := false
+	if not include_keyboard:
+		return out
+	if Input.is_key_pressed(KEY_LEFT) or Input.is_key_pressed(KEY_A):
+		out["left"] = true
+		kb_used = true
+	if Input.is_key_pressed(KEY_RIGHT) or Input.is_key_pressed(KEY_D):
+		out["right"] = true
+		kb_used = true
+	if Input.is_key_pressed(KEY_UP) or Input.is_key_pressed(KEY_W):
+		out["up"] = true
+		kb_used = true
+	if Input.is_key_pressed(KEY_DOWN) or Input.is_key_pressed(KEY_S):
+		out["down"] = true
+		kb_used = true
+	if Input.is_key_pressed(KEY_ENTER) or Input.is_key_pressed(KEY_KP_ENTER) \
+			or Input.is_key_pressed(KEY_SPACE):
+		out["accept"] = true
+		kb_used = true
+	# 菜单里用哪种输入，就认为 1P 用的是哪种（HUD 提示据此切换）
+	if pad_used:
+		_last_source["p1"] = "gamepad"
+	elif kb_used:
+		_last_source["p1"] = "keyboard"
 	return out
 
 
@@ -546,6 +699,8 @@ static func _pad_key(pad: Dictionary) -> String:
 static func _conflict_owner(group: String, func_name: String, kind: String, token: String) -> String:
 	var me := _identity(group, func_name)
 	for g in GROUPS:
+		if kind == "pad" and g != group:
+			continue
 		for f in FUNCS:
 			if _identity(g, f) == me:
 				continue
@@ -594,6 +749,8 @@ static func bind_pad(group: String, func_name: String, pad: Dictionary) -> Dicti
 	var clean := _pad_array([pad])
 	if clean.is_empty():
 		return {"ok": false, "conflict": ""}
+	if String(clean[0]["type"]) == "button" and int(clean[0]["index"]) in [JOY_BUTTON_START, JOY_BUTTON_BACK, JOY_BUTTON_GUIDE]:
+		return {"ok": false, "conflict": "Start / Back / Guide 为菜单保留键"}
 	var owner := _conflict_owner(group, func_name, "pad", _pad_key(clean[0]))
 	if owner != "":
 		return {"ok": false, "conflict": owner}
@@ -632,8 +789,8 @@ static func debug_snapshot() -> Dictionary:
 			var e = _live.get(a, {"keys": [], "pads": []})
 			binds[a] = {"keys": key_labels(a), "pads": pad_labels(a), "raw_keys": e["keys"]}
 	return {
-		"config_path": CONFIG_PATH,
-		"config_abs": ProjectSettings.globalize_path(CONFIG_PATH),
+		"config_path": config_path,
+		"config_abs": ProjectSettings.globalize_path(config_path),
 		"loaded": _loaded,
 		"deadzone": float(_cfg["deadzone"]),
 		"rumble": bool(_cfg["rumble"]),
@@ -644,6 +801,8 @@ static func debug_snapshot() -> Dictionary:
 		"connected": Input.get_connected_joypads(),
 		"seen": _seen.keys(),
 		"available": available_devices(),
+		"nav_device": nav_device(),
+		"last_source": {"p1": last_source("p1"), "p2": last_source("p2")},
 		"custom": has_custom_bindings(),
 		"bindings": binds,
 	}
