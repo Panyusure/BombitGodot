@@ -89,6 +89,7 @@ static func draw_floor(ci: CanvasItem, theme: String, map_data: Array) -> void:
 			var line_col = Color(80 / 255.0, 109 / 255.0, 64 / 255.0, 0.06) if theme == "forest" \
 				else Color(80 / 255.0, 95 / 255.0, 115 / 255.0, 0.12)
 			ci.draw_rect(Rect2(x + 0.5, y + 0.5, TILE - 1, TILE - 1), line_col, false, 1.0, true)
+			MapDetail.ground(ci, theme, c, r)
 			if theme == "forest":
 				if seed % 3 == 0:
 					var grass = PackedVector2Array()
@@ -129,6 +130,9 @@ static func draw_floor(ci: CanvasItem, theme: String, map_data: Array) -> void:
 # ---------------- 硬墙 ----------------
 
 static func draw_hard(ci: CanvasItem, c: int, r: int, theme: String) -> void:
+	if c == 0 or r == 0 or c == Cfg.COLS - 1 or r == Cfg.ROWS - 1:
+		MapDetail.border(ci, theme, c, r)
+		return
 	var p = Cfg.theme(theme)
 	var x = c * TILE
 	var y = r * TILE
@@ -284,7 +288,9 @@ static func draw_brick_variant(ci: CanvasItem, c: int, r: int, theme: String, va
 		var cols = [Color("#c2d99c"), Color("#a8cd8f"), Color("#d0e2ab")]
 		for i in 3:
 			var v = [[15, 20, 10], [32, 20, 10], [24, 11, 12]][i]
-			ci.draw_circle(Vector2(x + v[0], y + v[1]), v[2], cols[i], true, -1.0, true)
+			fill_circle_gradient(ci, x + v[0], y + v[1], v[2],
+				Vector2(x, y + v[1] - v[2]), Vector2(x, y + v[1] + v[2]),
+				[[0.0, cols[i].lightened(0.12)], [1.0, cols[i].darkened(0.13)]])
 			ci.draw_arc(Vector2(x + v[0], y + v[1]), v[2], 0, TAU2, 24, Color("#91b27c"), 1.0, true)
 		ci.draw_arc(Vector2(x + 23, y + 10), 6, 3.6, 5.1, 10, Color("#eff3cb"), 2.0, true)
 	elif theme == "forest":
@@ -301,20 +307,23 @@ static func draw_brick_variant(ci: CanvasItem, c: int, r: int, theme: String, va
 				var a := PI + PI * float(k) / float(segs)
 				cap.append(Vector2(ccx + cos(a) * crx, ccy + sin(a) * cry))
 			cap.append_array(quad(Vector2(ccx + crx, ccy), Vector2(ccx, ccy + 6.0), Vector2(ccx - crx, ccy)))
-			poly_fill(ci, cap, v[3])
+			fill_gradient(ci, cap, Vector2(ccx, ccy - cry), Vector2(ccx, ccy + 4),
+				[[0.0, (v[3] as Color).lightened(0.19)], [1.0, (v[3] as Color).darkened(0.1)]])
 			var cap_outline := cap
 			cap_outline.append(cap[0])
 			poly_line(ci, cap_outline, Color("#aa826e"), 1.0)
 			ci.draw_circle(Vector2(x + v[0] - 3, y + v[1] - 8), 2, Color("#fff0d6"), true, -1.0, true)
 	elif theme == "factory" and variant == 1:
-		blob(ci, x + 8, y + 11, 32, 29, 6, Color("#ba9475"), Color("#816e5e"), 1.5)
+		fill_rr_grad(ci, x + 8, y + 11, 32, 29, 6, Color("#d0ad8b"), Color("#9e795f"))
+		UIDraw.stroke_rr(ci, x + 8, y + 11, 32, 29, 6, Color("#816e5e"), 1.5)
 		ellipse(ci, x + 24, y + 11, 16, 6, Color("#d6b596"))
 		ellipse_stroke(ci, x + 24, y + 11, 16, 6, Color("#907762"), 1.0)
 		blob(ci, x + 7, y + 16, 34, 4, 2, Color("#677d87"))
 		blob(ci, x + 7, y + 32, 34, 4, 2, Color("#677d87"))
 		ci.draw_circle(Vector2(x + 24, y + 26), 4, Color("#f5d68e"), true, -1.0, true)
 	elif theme == "factory":
-		blob(ci, x + 9, y + 10, 30, 31, 6, Color("#c1a789"), Color("#8b7a65"), 1.5)
+		fill_rr_grad(ci, x + 9, y + 10, 30, 31, 6, Color("#dac3a3"), Color("#aa8e76"))
+		UIDraw.stroke_rr(ci, x + 9, y + 10, 30, 31, 6, Color("#8b7a65"), 1.5)
 		blob(ci, x + 16, y + 5, 16, 8, 3, Color("#b7c8c4"), Color("#6c868b"), 1)
 		blob(ci, x + 14, y + 17, 20, 15, 4, Color("#7ca5a1"), Color("#5a8587"), 1)
 		poly_line(ci, PackedVector2Array([
@@ -324,14 +333,17 @@ static func draw_brick_variant(ci: CanvasItem, c: int, r: int, theme: String, va
 		blob(ci, x + 9, y + 29, 30, 12, 4, Color("#d4a8bf"), Color("#a77f9d"), 1)
 		for v in [[15, 15, Color("#a9dcd5")], [31, 14, Color("#efb7c8")], [24, 10, Color("#eed19b")]]:
 			ci.draw_line(Vector2(x + v[0], y + v[1] + 9), Vector2(x + 24, y + 33), Color("#b894b3"), 1.0, true)
-			ellipse(ci, x + v[0], y + v[1], 7, 9, v[2])
+			fill_gradient(ci, CanvasArt.ellipse_pts(x + v[0], y + v[1], 7, 9),
+				Vector2(x + v[0] - 4, y + v[1] - 7), Vector2(x + v[0] + 5, y + v[1] + 8),
+				[[0.0, (v[2] as Color).lightened(0.22)], [1.0, (v[2] as Color).darkened(0.13)]])
 			ellipse_stroke(ci, x + v[0], y + v[1], 7, 9, Color("#ac8da7"), 1.0)
 			ci.draw_circle(Vector2(x + v[0] - 2, y + v[1] - 3), 1.5, Color("#fff1df"), true, -1.0, true)
 	else:
 		blob(ci, x + 8, y + 29, 32, 13, 4, Color("#a5cfcd"), Color("#7da4ab"), 1)
 		ci.draw_line(Vector2(x + 24, y + 30), Vector2(x + 24, y + 12), Color("#bd9a7b"), 3.0, true)
 		for v in [[18, 17, 9], [29, 16, 10], [24, 9, 10]]:
-			ci.draw_circle(Vector2(x + v[0], y + v[1]), v[2], Color("#f2c6d6"), true, -1.0, true)
+			fill_circle_gradient(ci, x + v[0], y + v[1], v[2], Vector2(x, y), Vector2(x, y + 28),
+				[[0.0, Color("#ffe5e9")], [1.0, Color("#dba4c4")]])
 		ci.draw_arc(Vector2(x + 24, y + 14), 8, 0.3, 2.6, 16, Color("#d7a3ba"), 1.5, true)
 
 # ---------------- 环路 ----------------
@@ -447,6 +459,7 @@ static func draw_landmark(ci: CanvasItem, lm: Dictionary) -> void:
 		for j in 10:
 			ci.draw_circle(Vector2(x - 59 + j * 13, y - 11), 2.7, Color("#fff1ba"), true, -1.0, true)
 		ItemIcons.draw(ci, "star", x, y - 66, 17)
+	MapDetail.landmark_trim(ci, theme)
 
 # ---------------- 动态场景 ----------------
 
@@ -461,8 +474,9 @@ static func draw_scenery_motion(ci: CanvasItem, lm: Dictionary, time: float) -> 
 		for i in path.size():
 			var progress = i + fmod(time * 1.65, 1.0)
 			var pt = Scenery.point(path, progress)
-			var at = Scenery.nearest(path, pt.x, pt.y)
-			var dir = Vector2(float(at.get("dx", 1.0)), float(at.get("dy", 0.0))).normalized()
+			# Progress already identifies the segment; avoid a full path scan per arrow.
+			var segment := int(floor(fposmod(progress, float(path.size()))))
+			var dir := Vector2(path[(segment + 1) % path.size()] - path[segment]).normalized()
 			ci.draw_set_transform(pt, dir.angle(), Vector2.ONE)
 			poly_line(ci, PackedVector2Array([Vector2(-4, -5), Vector2(2, 0), Vector2(-4, 5)]),
 				Color("#e8ce8c"), 2.0)

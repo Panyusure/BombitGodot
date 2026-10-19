@@ -2,12 +2,14 @@
 # 绿色包内容与 docs/绿色包说明.txt 的【文件】清单保持一致。
 param(
     [ValidatePattern('^[0-9]+\.[0-9]+(?:\.[0-9]+)?$')]
-    [string]$Version = '2.0',
+    [string]$Version = '2.1',
     [switch]$SkipWeb
 )
 
 $ErrorActionPreference = "Stop"
 $root = $PSScriptRoot
+$projectVersion = [regex]::Match([System.IO.File]::ReadAllText((Join-Path $root 'project.godot')), '(?m)^config/version="([^"]+)"').Groups[1].Value
+if ($Version -ne $projectVersion) { throw "Package version $Version differs from project version $projectVersion" }
 $godot = "E:\Godot_v4.7.2-stable_win64.exe\Godot_v4.7.2-stable_win64_console.exe"
 $distRoot = [System.IO.Path]::GetFullPath((Join-Path $root 'dist'))
 $dist = [System.IO.Path]::GetFullPath((Join-Path $distRoot "BombIt-Godot-v$Version-win64"))

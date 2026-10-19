@@ -3,7 +3,7 @@ extends Node2D
 ## 静态地图图层：只在地图变化时重绘，由 Board 的 SubViewport 缓存成纹理。
 ##
 ## 分成两层，是为了让「炸掉一块软砖」不必把整张地图重画：
-##   layer = 0（base）  ：地板 + 环路 + 硬墙 —— 同一关内**永不变化**
+##   layer = 0（base）  ：地板 + 环路 + 硬墙 —— 换关或硬墙被破坏时重绘
 ##   layer = 1（dest）  ：软砖 + 中央设施 + 主题边界灯串 —— 只在内容变化时重画
 ##
 ## 拆层的安全性：原作 drawMap 的顺序是「地板 → 环路 → 逐格(硬墙|软砖) → 中央设施 → 灯串」，
@@ -11,11 +11,69 @@ extends Node2D
 ## 所以把硬墙提到软砖之前画，可见结果完全相同（这一点用 tests/verify_map_layers.gd
 ## 做了逐像素比对确认）。
 ##
-## 实测（2× 超采样，森林 52 硬墙 / 39 软砖）：整张重画 45.20ms，
-## 其中地板 13.71 / 硬墙 19.17 / 软砖 11.39 / 设施 1.19 —— 拆层后炸砖只需重画约 12.6ms。
+## retain_cells 为正式游戏路径：每块软砖保留独立绘图指令，炸砖不重建其他砖块。
+## 默认单节点路径留作渲染对照，见 tests/verify_retained_map.gd。
 
 var world: World = null
 var layer := 0
+var retain_cells := false
+var _cells: Dictionary = {}
+var _detail_key := ""
+var cell_redraws := 0
+
+class BrickCell extends Node2D:
+	var column := 0
+	var row := 0
+	var theme := ""
+	var variant := 0
+	func _draw() -> void:
+		MapArt.draw_brick(self, column, row, theme, variant)
+
+## Preserve each brick's draw commands. Removing one brick no longer rebuilds
+## every surviving brick's curves and gradients; the viewport still composites once.
+func sync_cells() -> void:
+	if not retain_cells or world == null:
+		return
+	var lm: Dictionary = world.landmark
+	var has_landmark := not lm.is_empty() and String(lm.get("theme", "")) == world.theme
+	var active := {}
+	var draw_index := 0
+	for r in Cfg.ROWS:
+		for c in Cfg.COLS:
+			if has_landmark and c >= 6 and c <= 8 and r >= 5 and r <= 7:
+				continue
+			if Grid.at(world.map, c, r) != Cfg.T_BRICK:
+				continue
+			var key := r * Cfg.COLS + c
+			active[key] = true
+			var variant := int(world.brick_variants[key]) if not world.brick_variants.is_empty() else 0
+			var cell: BrickCell = _cells.get(key)
+			if cell == null:
+				cell = BrickCell.new()
+				cell.column = c
+				cell.row = r
+				cell.show_behind_parent = true
+				_cells[key] = cell
+				add_child(cell)
+			# Restored cells must keep the reference's row-major overlap order.
+			if cell.get_index() != draw_index:
+				move_child(cell, draw_index)
+			draw_index += 1
+			if cell.theme != world.theme or cell.variant != variant:
+				cell.theme = world.theme
+				cell.variant = variant
+				cell.queue_redraw()
+				cell_redraws += 1
+	for key in _cells.keys():
+		if not active.has(key):
+			var cell: BrickCell = _cells[key]
+			remove_child(cell)
+			cell.queue_free()
+			_cells.erase(key)
+	var detail_key := "%d:%s:%s" % [world.map_identity, world.theme, str(has_landmark)]
+	if detail_key != _detail_key:
+		_detail_key = detail_key
+		queue_redraw()
 
 func _draw() -> void:
 	if world == null or world.map.is_empty():
@@ -51,7 +109,7 @@ func _draw_reference(lm: Dictionary, has_landmark: bool) -> void:
 	if world.theme == "park":
 		_draw_park_lights()
 
-## 同一关内不会变化的部分。
+## 换关或硬墙被破坏时变化的部分。
 func _draw_base(lm: Dictionary, has_landmark: bool) -> void:
 	MapArt.draw_floor(self, world.theme, world.map)
 	MapArt.draw_track(self, lm if has_landmark else {})
@@ -64,6 +122,11 @@ func _draw_base(lm: Dictionary, has_landmark: bool) -> void:
 
 ## 会随对局变化的部分：软砖被炸掉、中央设施（换关）、边界灯串。
 func _draw_destructible(lm: Dictionary, has_landmark: bool) -> void:
+	if retain_cells:
+		MapArt.draw_landmark(self, lm if has_landmark else {})
+		if world.theme == "park":
+			_draw_park_lights()
+		return
 	for r in Cfg.ROWS:
 		for c in Cfg.COLS:
 			if has_landmark and c >= 6 and c <= 8 and r >= 5 and r <= 7:

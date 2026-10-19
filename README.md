@@ -76,7 +76,7 @@
 
 本机移动采用客户端预测，并按房主确认的输入校正位置；炸弹、技能结果、伤害与胜负仍由房主决定。两端需要使用相同的新版本。
 
-当前源码已包含联机模式；下载包是否包含此功能，以对应 Release 的说明为准。网络实现与验证范围见 [局域网联机说明](docs/局域网联机.md)。
+v2.1 Windows 下载包已包含联机模式、三主题地图精修和地图绘制优化。两端都使用 v2.1 即可按上述步骤联机；详细更新见 [v2.1 发布说明](docs/发布说明-v2.1.md)，网络实现与验证范围见 [局域网联机说明](docs/局域网联机.md)。
 
 ---
 
@@ -146,7 +146,7 @@
 
 ## 下载与运行
 
-1. 到 [Releases](https://github.com/Panyusure/BombitGodot/releases/latest) 下载 `BombIt-Godot-v2.0-win64.zip`。
+1. 到 [Releases](https://github.com/Panyusure/BombitGodot/releases/latest) 下载 `BombIt-Godot-v2.1-win64.zip`。
 2. 解压到任意目录，双击 **`启动游戏.bat`**（或直接运行 `BombitGodot.exe`）。
 3. `BombitGodot.exe` 和 `BombitGodot.pck` 必须放在同一目录，别只拷一个。
 

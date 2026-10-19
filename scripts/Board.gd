@@ -5,8 +5,8 @@ extends Node2D
 ##
 ## 静态地图分两层缓存（细节见 MapPainter.gd）：
 ##   base：地板 + 环路 + 硬墙 —— 换关或 BOSS 破坏硬墙时重画
-##   dest：软砖 + 中央设施 + 灯串 —— 炸掉一块软砖只重画这一层
-## 实测（2× 超采样，森林 52 硬墙 / 39 软砖）：整张重画 45.20ms → 炸砖只重画约 12.6ms。
+##   dest：软砖 + 中央设施 + 灯串 —— 独立保留软砖绘图指令，炸砖只删除对应节点
+## 地图变化后只重新合成 dest 纹理，未变化的砖块和设施不重新生成几何。
 
 var world: World = null:
 	set(value):
@@ -51,6 +51,7 @@ func _make_layer(layer_id: int, z: int) -> SubViewport:
 	var painter := Node2D.new()
 	painter.set_script(load("res://scripts/MapPainter.gd"))
 	painter.set("layer", layer_id)
+	painter.set("retain_cells", layer_id == 1)
 	painter.scale = Vector2(2, 2)
 	vp.add_child(painter)
 	var spr := Sprite2D.new()
@@ -73,6 +74,8 @@ func _draw() -> void:
 	# → 毒刺 → 爆炸范围预览 → 道具 → 火焰 → 技能特效。
 	MapArt.draw_scenery_motion(self, world.landmark, anim_time)
 	_draw_motes()
+	if world.theme == "forest" or String(world.landmark.get("theme", "")) == world.theme:
+		MapDetail.atmosphere(self, world.theme, anim_time)
 	MapArt.draw_poison(self, world.poison)
 	MapArt.draw_bomb_zones(self, world, anim_time)
 	MapArt.draw_items(self, world.items, anim_time)
@@ -117,5 +120,5 @@ func _ensure_map() -> void:
 	if dkey != _dest_key:
 		_dest_key = dkey
 		_painter_dest.world = world
-		_painter_dest.queue_redraw()
+		_painter_dest.sync_cells()
 		_vp_dest.render_target_update_mode = SubViewport.UPDATE_ONCE
