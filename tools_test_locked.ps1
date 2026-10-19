@@ -45,7 +45,7 @@ while ($true) {
 
 $failed = $false
 try {
-    $suites = if ($Suite -eq 'all') { @('test_core', 'test_play', 'test_art', 'test_input', 'test_versus_lobby', 'test_conveyor', 'test_display') } else { @($Suite) }
+    $suites = if ($Suite -eq 'all') { @('test_core', 'test_play', 'test_art', 'test_input', 'test_versus_lobby', 'test_conveyor', 'test_display', 'test_lan') } else { @($Suite) }
     foreach ($s in $suites) {
         Write-Output "=== $s ==="
         # Do not let a native stderr line escalate into a terminating error.

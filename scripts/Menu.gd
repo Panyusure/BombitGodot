@@ -8,6 +8,7 @@ signal start_requested(mode: String, p1: String, p2: String)
 signal mute_toggled
 signal replay_requested
 signal settings_closed
+signal lan_requested
 
 const MODES := [
 	{"id": "adventure", "input_mode": "solo", "label": "单人 · 闯关打怪",
@@ -22,6 +23,10 @@ const MODES := [
 		"desc": "先得 2 分者获胜", "players": 2,
 		"color": Color("FF5E9E"), "soft": Color("FFD0DE"), "abbr": "VS",
 		"motif": "versus", "no": "03", "tagline": "同屏双打 · 先到 2 分"},
+	{"id": "lan", "input_mode": "lan", "label": "联机对战",
+		"desc": "两台电脑 · 局域网实时对战", "players": 2,
+		"color": Color("FFD23F"), "soft": Color("FFF0B5"), "abbr": "LAN",
+		"motif": "network", "no": "04", "tagline": "创建 / 加入房间 · 独立选角"},
 ]
 
 const CHAR_UI := {
@@ -206,8 +211,7 @@ func _char_visual(cid: String) -> Dictionary:
 func _mode_rects() -> Array:
 	var out: Array = []
 	for i in MODES.size():
-		out.append(Rect2(MODE_CARD["x"] + i * (MODE_CARD["w"] + MODE_CARD["gap"]),
-			MODE_CARD["y"], MODE_CARD["w"], MODE_CARD["h"]))
+		out.append(Rect2(20 + (i % 2) * 348, 226 + (i / 2) * 166, 332, 148))
 	return out
 
 func _char_rects() -> Array:
@@ -1141,6 +1145,9 @@ func _unhandled_input(event: InputEvent) -> void:
 			switch_t = 0.0
 
 func _open_character() -> void:
+	if _mode()["id"] == "lan":
+		lan_requested.emit()
+		return
 	step = "chars"
 	step_t = 0.0
 	switch_t = 0.0
@@ -1264,9 +1271,9 @@ func _draw_header_mode() -> void:
 	UIDraw.text(self, "BOMBIT", 26, 151, {"size": 44, "weight": 900, "family": "impact",
 		"fill": UIDraw.ORANGE, "stroke": UIDraw.INK, "strokeWidth": 1.7,
 		"shadow": UIDraw.INK, "shadowX": 3, "shadowY": 3})
-	UIDraw.text(self, "精灵冒险  ×  同屏对战", 268, 85,
+	UIDraw.text(self, "精灵冒险  ×  同屏 / 局域网对战", 268, 85,
 		{"size": 11, "weight": 700, "family": "cn", "fill": UIDraw.INK})
-	UIDraw.text(self, "6 SPIRITS  /  3 MODES  /  1 FUSE", 268, 101,
+	UIDraw.text(self, "6 SPIRITS  /  4 MODES  /  1 FUSE", 268, 101,
 		{"size": 11, "weight": 700, "family": "mono", "fill": UIDraw.INK, "alpha": 0.62})
 	var scenes := [["晨露森林", UIDraw.GREEN], ["星汽工厂", UIDraw.CYAN], ["星糖游乐园", UIDraw.PINK]]
 	var sx := 268.0
@@ -1286,7 +1293,7 @@ func _draw_mode_section() -> void:
 		{"size": 16, "weight": 900, "family": "cn", "fill": UIDraw.INK})
 	UIDraw.text(self, "选好玩法后确认", MODE_CARD["x"] + 146, 202,
 		{"size": 11, "weight": 500, "family": "cn", "fill": UIDraw.INK, "alpha": 0.52})
-	UIDraw.text(self, "MODE SELECT  /  3", Cfg.VIEW_W - MODE_CARD["x"], 208,
+	UIDraw.text(self, "MODE SELECT  /  4", Cfg.VIEW_W - MODE_CARD["x"], 208,
 		{"size": 11, "weight": 700, "family": "mono", "fill": UIDraw.INK, "alpha": 0.45, "align": "right"})
 	draw_line(Vector2(MODE_CARD["x"], 216), Vector2(Cfg.VIEW_W - MODE_CARD["x"], 216),
 		Color(20 / 255.0, 16 / 255.0, 25 / 255.0, 0.16), 1.0, true)
@@ -1297,58 +1304,40 @@ func _draw_mode_cards() -> void:
 		_draw_mode_card(i, rects[i])
 
 func _draw_mode_card(idx: int, rect: Rect2) -> void:
-	var mode: Dictionary = MODES[idx]
+	_draw_compact_mode(idx, rect)
+
+func _draw_compact_mode(idx: int, rect: Rect2) -> void:
+	var data: Dictionary = MODES[idx]
 	var selected := idx == mode_index
 	var hovered: bool = hover.get("kind", "") == "mode" and int(hover.get("index", -1)) == idx
-	var lift := (sin(pulse * 2.5) * 1.4 if selected else 0.0) + (-4.0 if hovered else 0.0)
 	var x := rect.position.x
-	var y := rect.position.y + lift
-	var w := rect.size.x
-	var h := rect.size.y
-	var ink: Color = mode["color"]
-	UIDraw.panel(self, x, y, w, h, {
-		"fill": UIDraw.INK if selected else mode["soft"],
-		"stroke": UIDraw.INK, "lw": 2.6, "r": 4,
-		"shadow": ink if selected else UIDraw.INK,
-		"shadowX": 7 if selected else 4, "shadowY": 7 if selected else 4,
-	})
-	draw_rect(Rect2(x, y, w, 6), ink, true, -1.0, true)
-	UIDraw.text(self, mode["no"], x + 15, y + 56, {"size": 54, "weight": 900, "family": "impact",
-		"fill": mode["color"] if selected else Color(20 / 255.0, 16 / 255.0, 25 / 255.0, 0.22)})
-	UIDraw.text(self, mode["abbr"], x + 15, y + 72, {"size": 11, "weight": 700, "family": "mono",
-		"fill": Color(245 / 255.0, 235 / 255.0, 216 / 255.0, 0.65) if selected else Color(20 / 255.0, 16 / 255.0, 25 / 255.0, 0.4)})
-	UIDraw.tag(self, "2P" if int(mode["players"]) == 2 else "1P", x + w - 14, y + 22, {
-		"size": 11, "family": "mono", "fill": mode["color"] if selected else UIDraw.INK,
-		"fg": UIDraw.INK if selected else UIDraw.CREAM, "padX": 6, "h": 16, "align": "right",
-		"stroke": UIDraw.INK, "lw": 1,
-	})
-	UIDraw.text(self, mode["label"], x + 15, y + 110, {"size": 20, "weight": 900, "family": "cn",
-		"fill": UIDraw.CREAM if selected else UIDraw.INK})
-	UIDraw.text(self, mode["tagline"], x + 15, y + 130, {"size": 11, "weight": 500, "family": "cn",
-		"fill": Color(245 / 255.0, 235 / 255.0, 216 / 255.0, 0.55) if selected else Color(20 / 255.0, 16 / 255.0, 25 / 255.0, 0.7)})
-	UIDraw.wrap(self, mode["desc"], x + 15, y + 148, w - 30, 12, 16,
-		Color(245 / 255.0, 235 / 255.0, 216 / 255.0, 0.72) if selected else Color(20 / 255.0, 16 / 255.0, 25 / 255.0, 0.62),
-		2, 500, "cn")
-	_draw_mode_motif(mode, x + w * 0.5, y + 224, 60, selected)
-	UIDraw.text(self, "2P / LOCAL VERSUS" if int(mode["players"]) == 2 else "1P / SOLO",
-		x + 15, y + h - 22, {"size": 11, "weight": 700, "family": "mono",
-		"fill": Color(245 / 255.0, 235 / 255.0, 216 / 255.0, 0.7) if selected else Color(20 / 255.0, 16 / 255.0, 25 / 255.0, 0.65)})
-	UIDraw.text(self, "ENTER", x + w - 15, y + h - 22, {"size": 11, "weight": 700, "family": "mono",
-		"fill": mode["color"] if selected else Color(20 / 255.0, 16 / 255.0, 25 / 255.0, 0.38), "align": "right"})
-	if selected:
-		UIDraw.tag(self, "SELECTED", x + w - 14, y + h - 45, {"size": 11, "family": "mono",
-			"fill": UIDraw.YELLOW, "fg": UIDraw.INK, "padX": 5, "h": 13, "align": "right",
-			"stroke": UIDraw.INK, "lw": 1, "rot": 0.02})
-	if hovered and not selected:
-		# menu.js:842 —— fill: 'rgba(255,253,246,.12)'（U.C.white，不是纯白）
-		UIDraw.panel(self, x, y, w, h, {"fill": Color(UIDraw.WHITE.r, UIDraw.WHITE.g, UIDraw.WHITE.b, 0.12), "r": 4})
+	var y: float = rect.position.y - (3 if hovered else 0) + (sin(pulse * 2.5) if selected else 0)
+	var fg := UIDraw.CREAM if selected else UIDraw.INK
+	UIDraw.panel(self, x, y, rect.size.x, rect.size.y, {"fill": UIDraw.INK if selected else data["soft"],
+		"stroke": UIDraw.INK, "lw": 2.5, "r": 4, "shadow": data["color"] if selected else UIDraw.INK, "shadowX": 4, "shadowY": 4})
+	draw_rect(Rect2(x, y, rect.size.x, 5), data["color"])
+	UIDraw.text(self, data["no"], x + 14, y + 35, {"size": 38, "family": "impact", "fill": data["color"] if selected else UIDraw.INK})
+	UIDraw.text(self, data["label"], x + 72, y + 34, {"size": 20, "fill": fg})
+	UIDraw.text(self, data["tagline"], x + 15, y + 70, {"size": 11, "weight": 500, "fill": fg})
+	UIDraw.wrap(self, data["desc"], x + 15, y + 94, 235, 12, 17, Color(fg, 0.75), 2)
+	UIDraw.text(self, data["abbr"] + (" / SELECTED" if selected else " / ENTER"), x + 15, y + 132,
+		{"size": 11, "family": "mono", "fill": data["color"] if selected else UIDraw.INK})
+	var center := Vector2(x + 290, y + 105)
+	_draw_mode_motif(data, center.x, center.y, 44, selected, 0.55)
 
-func _draw_mode_motif(mode: Dictionary, cx: float, cy: float, r: float, selected: bool) -> void:
-	draw_set_transform(Vector2(cx, cy), 0.0, Vector2.ONE)
+func _draw_mode_motif(mode: Dictionary, cx: float, cy: float, r: float, selected: bool, scale_factor: float = 1) -> void:
+	draw_set_transform(Vector2(cx, cy), 0.0, Vector2.ONE * scale_factor)
 	draw_circle(Vector2.ZERO, r, mode["color"] if selected else UIDraw.CREAM, true, -1.0, true)
 	draw_arc(Vector2.ZERO, r, 0, TAU, 48, UIDraw.INK, 2.0, true)
 	UIDraw.dots(self, -r, -r, r * 2, r * 2, UIDraw.INK if selected else mode["color"], 0.08, 10)
 	match String(mode["motif"]):
+		"network":
+			for side in [-1, 1]:
+				draw_rect(Rect2(side * 22 - 12, -18, 24, 20), UIDraw.INK)
+				draw_rect(Rect2(side * 22 - 9, -15, 18, 14), UIDraw.CYAN if side < 0 else UIDraw.PINK)
+				draw_line(Vector2(side * 22, 4), Vector2(side * 22, 16), UIDraw.INK, 3, true)
+			draw_line(Vector2(-22, 16), Vector2(22, 16), UIDraw.INK, 3, true)
+			draw_circle(Vector2(sin(t * 2) * 17, 16), 4, UIDraw.ORANGE, true, -1, true)
 		"clock":
 			draw_circle(Vector2.ZERO, 42, UIDraw.CREAM, true, -1.0, true)
 			draw_arc(Vector2.ZERO, 42, 0, TAU, 48, UIDraw.INK, 3.0, true)
@@ -1375,7 +1364,7 @@ func _draw_mode_motif(mode: Dictionary, cx: float, cy: float, r: float, selected
 			]), UIDraw.CREAM, 3.0, true)
 			# menu.js:906 —— U.bomb 在 ctx.translate(cx, cy) 之内，落点是母题局部 (26, 24)；
 			# UIDraw.bomb 自带 draw_set_transform（替换而非叠加），所以这里要传绝对坐标。
-			UIDraw.bomb(self, cx + 26.0, cy + 24.0, 12, 0.2)
+			UIDraw.bomb(self, cx + 26.0 * scale_factor, cy + 24.0 * scale_factor, 12 * scale_factor, 0.2)
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
 func _draw_char_header() -> void:
@@ -1696,6 +1685,9 @@ func _draw_cta() -> void:
 	var active := step == "chars"
 	var label := "进入精灵选择"
 	var sub := "MODE " + String(mode["no"]) + "  →  SPIRIT SELECT"
+	if mode["id"] == "lan":
+		label = "进入联机大厅"
+		sub = "MODE 04  →  LAN LOBBY"
 	if active:
 		if int(mode["players"]) == 1:
 			label = "开始游戏"

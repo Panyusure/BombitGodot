@@ -2,7 +2,7 @@ extends Node2D
 
 ## 主状态机：菜单 → 关前档案 → 对局 → 暂停 / 结算；固定 60Hz 逻辑与插值渲染。
 
-enum State { MENU, BRIEFING, PLAY, PAUSE, RESULT, REPLAY }
+enum State { MENU, BRIEFING, PLAY, PAUSE, RESULT, REPLAY, LAN }
 
 const FONT_PATH = "res://assets/fonts/msyh.ttc"
 
@@ -32,6 +32,9 @@ var _result_timer = 0.0
 var _music_clock = 0.0
 var audio: Node = null
 var effects = null              # Effects.gd：粒子 / 飘字 / 震屏（原作 src/render/effects.js）
+var lan: Node
+var lan_lobby: Control
+var lan_exit: ConfirmationDialog
 
 func _ready() -> void:
 	audio = get_node_or_null("/root/GameAudio")
@@ -47,6 +50,7 @@ func _ready() -> void:
 	menu.mute_toggled.connect(_toggle_mute)
 	menu.replay_requested.connect(_on_replay_requested)
 	menu.settings_closed.connect(_close_pause_settings)
+	menu.lan_requested.connect(_open_lan)
 	replay_ui.setup(self)
 	replay_ui.visible = false
 	overlay.action.connect(_on_overlay_action)
@@ -61,6 +65,87 @@ func _ready() -> void:
 	effects.name = "Effects"
 	effects.position = Vector2(0.0, Cfg.HUD_H)
 	add_child(effects)
+	audio.play_music("menu")
+	_setup_lan()
+
+func _setup_lan() -> void:
+	lan = preload("res://scripts/net/LanSession.gd").new()
+	lan.name = "LanSession"
+	add_child(lan)
+	lan_lobby = preload("res://scenes/lan_lobby.tscn").instantiate()
+	$UILayer.add_child(lan_lobby)
+	lan_lobby.setup(lan)
+	lan_lobby.back_requested.connect(_to_menu)
+	lan.game_started.connect(_lan_started)
+	lan.game_ended.connect(_show_result)
+	lan.game_events.connect(_lan_events)
+	lan.lobby_returned.connect(_lan_returned)
+	lan_exit = ConfirmationDialog.new()
+	lan_exit.title = "离开联机对战"
+	lan_exit.dialog_text = "联机对局不会暂停。确认离开房间并返回主菜单？"
+	lan_exit.confirmed.connect(_to_menu)
+	lan_exit.canceled.connect(_sync_action_edges)
+	add_child(lan_exit)
+
+func _open_lan() -> void:
+	if state != State.MENU:
+		return
+	mode = "lan"
+	state = State.LAN
+	menu.visible = false
+	InputSettings.active_players = 1
+	lan_lobby.open()
+
+func _lan_started() -> void:
+	if mode != "lan":
+		return
+	world = lan.world
+	board.world = world
+	hud.world = world
+	hud.network_player = "p%d" % (lan.slot + 1)
+	overlay.world = world
+	state = State.PLAY
+	lan_lobby.visible = false
+	menu.visible = false
+	board.visible = true
+	actors.visible = true
+	hud.visible = true
+	overlay.hide_overlay()
+	_clear_views()
+	_sync_views()
+	_sync_bombs()
+	_prev_bomb.clear()
+	_prev_skill.clear()
+	_last_dir.clear()
+	_sync_action_edges()
+	_game_music(true)
+	if world.players.any(func(p): return p.asset_id == "weilai"):
+		call_deferred("_prewarm_soul_sdf")
+
+func _lan_events(events: Array) -> void:
+	if mode != "lan" or world == null:
+		return
+	world.events = events
+	_drain_events()
+	effects.feed(world, 0)
+
+func _lan_returned() -> void:
+	if mode != "lan":
+		return
+	state = State.LAN
+	world = null
+	board.world = null
+	hud.world = null
+	hud.network_player = ""
+	board.visible = false
+	actors.visible = false
+	hud.visible = false
+	overlay.hide_overlay()
+	_clear_views()
+	if effects != null:
+		effects.reset()
+	lan_exit.hide()
+	lan_lobby.open()
 	audio.play_music("menu")
 
 func _setup_display() -> void:
@@ -213,6 +298,12 @@ func _prewarm_soul_sdf() -> void:
 	])
 
 func _on_overlay_action(name: String) -> void:
+	if mode == "lan":
+		if name == "restart":
+			lan.return_lobby()
+		elif name == "menu":
+			_to_menu()
+		return
 	match name:
 		"start":
 			if state == State.BRIEFING and world != null:
@@ -240,6 +331,12 @@ func _restart_run() -> void:
 	_start_run()
 
 func _to_menu() -> void:
+	if mode == "lan":
+		mode = "adventure" # Disconnect signals must not reopen the network UI.
+		lan.close()
+		lan_lobby.visible = false
+		lan_exit.hide()
+	hud.network_player = ""
 	state = State.MENU
 	world = null
 	board.world = null
@@ -276,6 +373,16 @@ func _unhandled_input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 		return
 	if state == State.PAUSE and menu.settings_open:
+		return
+	if mode == "lan":
+		if state == State.PLAY and ((event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_ESCAPE) \
+			or (event is InputEventJoypadButton and event.pressed and event.button_index == JOY_BUTTON_START)):
+			lan_exit.popup_centered()
+		elif state == State.RESULT and event is InputEventKey and event.pressed and not event.echo:
+			if event.keycode == KEY_ESCAPE:
+				_to_menu()
+			elif event.keycode == KEY_R:
+				lan.return_lobby()
 		return
 	# 手柄 Start：暂停 / 继续（等价于键盘 Esc / P；键位捕获时 Menu 会先吃掉事件）
 	if event is InputEventJoypadButton:
@@ -322,6 +429,15 @@ func _pause() -> void:
 	audio.play_sfx("ui_click")
 
 func _physics_process(delta: float) -> void:
+	if mode == "lan":
+		if state == State.PLAY and world != null:
+			var action := _read_player("p1", 1) if not lan_exit.visible and lan.phase == "playing" else {}
+			lan.tick(action, delta)
+			if effects != null:
+				effects.update(delta)
+			_sync_views()
+			_sync_bombs()
+		return
 	if state == State.REPLAY:
 		if replay_ui != null:
 			replay_ui.physics_step(delta)
@@ -353,6 +469,8 @@ func _process(delta: float) -> void:
 		return
 	_apply_shake()
 	var alpha = Engine.get_physics_interpolation_fraction() if state == State.PLAY else 0.0
+	if mode == "lan" and not lan.host:
+		alpha = lan.render_alpha()
 	var view_time = world.time + (alpha / 60.0 if state == State.PLAY else 0.0)
 	board.anim_time = view_time
 	hud.hint_alpha = maxf(0.0, hud.hint_alpha - delta * (1.0 if world.time > 12.0 else 0.0))
@@ -403,7 +521,9 @@ func _show_result() -> void:
 	if state == State.RESULT:
 		return
 	state = State.RESULT
-	overlay.show_result(Match.summary(world))
+	var summary := Match.summary(world)
+	summary["network"] = mode == "lan"
+	overlay.show_result(summary)
 	audio.stop_music(0.7)
 
 func _game_music(force: bool) -> void:
@@ -492,6 +612,11 @@ func _read_actions() -> Dictionary:
 func _sync_action_edges() -> void:
 	if world == null:
 		return
+	if mode == "lan":
+		var keys := InputSettings.poll_player("p1", "solo")
+		_prev_bomb["p1"] = bool(keys["bomb"])
+		_prev_skill["p1"] = bool(keys["skill"])
+		return
 	for p in world.players:
 		var profile := "versus" if mode == "versus" else ("alt" if alt_keys else "solo")
 		var keys := InputSettings.poll_player(p.id, profile)
@@ -506,7 +631,7 @@ func _read_player(id: String, _slot: int) -> Dictionary:
 	if id != "p2":
 		if mode == "versus":
 			profile = "versus"
-		elif alt_keys:
+		elif alt_keys and mode != "lan":
 			profile = "alt"
 	var keys: Dictionary = InputSettings.poll_player(id, profile)
 	var left := bool(keys["left"])
@@ -518,7 +643,8 @@ func _read_player(id: String, _slot: int) -> Dictionary:
 
 	var hx = int(right) - int(left)
 	var hy = int(down) - int(up)
-	var p = world.player_by_id(id)
+	var actor_id := "p%d" % (lan.slot + 1) if mode == "lan" else id
+	var p = world.player_by_id(actor_id)
 	if p != null and hx != 0 and hy != 0:
 		var last: Vector2i = _last_dir.get(id, Vector2i.ZERO)
 		if last.x == 0:
@@ -540,6 +666,7 @@ func _read_player(id: String, _slot: int) -> Dictionary:
 		InputSettings.pulse(id, "skill")
 	return {
 		"hx": hx, "hy": hy,
+		"axis_pref": p.axis_pref if p != null else "x",
 		"bomb": bomb_edge,
 		"skill": skill_edge,
 	}
@@ -590,5 +717,6 @@ func _drain_events() -> void:
 			"round_started":
 				overlay.show_banner("第 %d 回合" % int(e.get("round", 2)), "", Cfg.UI_CYAN)
 			"match_over":
-				var won = String(e.get("winner", "")) == "p1"
+				var local_player := "p%d" % (lan.slot + 1) if mode == "lan" else "p1"
+				var won = String(e.get("winner", "")) == local_player
 				audio.play_sfx("win" if won else "lose")

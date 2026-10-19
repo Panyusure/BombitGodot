@@ -15,6 +15,8 @@ var _last_character := -1
 var _last_ready := false
 var _swap := 0.0
 var _ready_burst := 0.0
+var network_label := ""
+var network_readonly := false
 
 func animate(delta: float) -> void:
 	if choice == null:
@@ -70,6 +72,8 @@ func ready_rect() -> Rect2:
 	return Rect2(16, 382, size.x - 32, 30)
 
 func _gui_input(event: InputEvent) -> void:
+	if network_readonly:
+		return
 	if choice == null or not event is InputEventMouseButton or not event.pressed or event.button_index != MOUSE_BUTTON_LEFT:
 		return
 	for direction in [-1, 1]:
@@ -101,13 +105,15 @@ func _draw() -> void:
 	UIDraw.fill_rr(self, 0, 0, size.x, 62, 5, UIDraw.INK)
 	UIDraw.tag(self, "%dP" % (slot + 1), 14, 19, {"size": 16, "family": "impact", "fill": accent,
 		"h": 24, "align": "left", "stroke": null})
-	UIDraw.text(self, ("已准备 ✓" if ready else "选择中") if choice.has_control else "控制器离线", size.x - 14, 19,
+	UIDraw.text(self, ("已准备 ✓" if ready else "选择中") if choice.has_control else ("等待加入" if not network_label.is_empty() else "控制器离线"), size.x - 14, 19,
 		{"size": 13, "fill": (UIDraw.GREEN if ready else accent) if choice.has_control else UIDraw.ORANGE, "align": "right"})
 	var device := "键盘"
 	if choice.device_id >= 0:
 		device = InputSettings.device_name(choice.device_id)
 	elif not choice.has_control:
 		device = "手柄未连接 · 请重连或修改设置"
+	if not network_label.is_empty():
+		device = network_label
 	UIDraw.text(self, device, 14, 47, {"size": 11, "weight": 500, "fill": UIDraw.CREAM, "max_width": size.x - 28})
 	_draw_stage(accent, ready)
 	var texture: Texture2D = textures.get(id)
@@ -140,5 +146,8 @@ func _draw() -> void:
 	var rect := ready_rect()
 	UIDraw.panel(self, rect.position.x, rect.position.y, rect.size.x, rect.size.y, {"fill": UIDraw.GREEN if ready else (accent if choice.has_control else UIDraw.MUTED),
 		"stroke": UIDraw.INK, "lw": 2, "r": 3, "shadow": UIDraw.INK, "shadowX": 2, "shadowY": 2})
-	UIDraw.text(self, "已准备 · 取消准备" if ready else ("确认角色 · 准备" if choice.has_control else "等待手柄连接"), rect.get_center().x, rect.get_center().y,
+	var ready_label := "已准备 · 取消准备" if ready else ("确认角色 · 准备" if choice.has_control else "等待手柄连接")
+	if not network_label.is_empty() and network_readonly:
+		ready_label = ("对方已准备" if ready else "等待对方准备") if choice.has_control else "等待玩家加入"
+	UIDraw.text(self, ready_label, rect.get_center().x, rect.get_center().y,
 		{"size": 13, "weight": 900, "fill": UIDraw.INK, "align": "center"})

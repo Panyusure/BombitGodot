@@ -566,8 +566,8 @@ func _draw_result() -> void:
 	_draw_result_stats(sx + 16, sy + 44, sw - 32)
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
-	_draw_result_button(0, "再来一局", "Enter / R", UIDraw.YELLOW)
-	_draw_result_button(1, "返回菜单", "Esc / M", UIDraw.CREAM)
+	_draw_result_button(0, "返回联机大厅" if summary.get("network", false) else "再来一局", "Enter / R", UIDraw.YELLOW)
+	_draw_result_button(1, "退出联机" if summary.get("network", false) else "返回菜单", "Esc / M", UIDraw.CREAM)
 	UIDraw.tag(self, "← → 选择 · A / Enter 确认 · B / Esc 返回", Cfg.VIEW_W * 0.5, Cfg.VIEW_H - 25,
 		{"size": 11, "weight": 700, "family": "mono", "fill": UIDraw.INK, "fg": UIDraw.CREAM,
 		"padX": 9, "h": 18, "align": "center", "stroke": UIDraw.CREAM, "lw": 1})

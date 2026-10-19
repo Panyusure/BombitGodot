@@ -18,6 +18,7 @@ var world: World = null
 var font: Font = null
 var muted := false
 var hint_alpha := 1.0
+var network_player := ""
 
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -40,6 +41,8 @@ func _draw() -> void:
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
 func _meta() -> Dictionary:
+	if not network_player.is_empty():
+		return {"no": "04", "title": "联机对战", "en": "LAN VERSUS", "color": UIDraw.YELLOW, "tag": "SCORE"}
 	return MODE_META.get(world.mode, MODE_META_FALLBACK)
 
 ## 该玩家最近一次实际生效的输入来源是不是手柄（InputSettings 逐帧记录）。
@@ -61,6 +64,9 @@ func _dir_text() -> String:
 func hint_lines() -> Array:
 	if world == null:
 		return []
+	if not network_player.is_empty():
+		return [{"text": "本机 %s · %s 移动" % [network_player.to_upper(), _dir_text()], "y": 50.0, "size": 11, "family": "cn", "fill": UIDraw.CREAM},
+			{"text": "Esc / Start 离开 · 每台电脑控制一人", "y": 62.0, "size": 11, "family": "cn", "fill": UIDraw.CREAM}]
 	var dim := Color(245 / 255.0, 235 / 255.0, 216 / 255.0, 0.7)
 	var faint := Color(245 / 255.0, 235 / 255.0, 216 / 255.0, 0.36)
 	if world.input_mode == "versus":
@@ -197,6 +203,8 @@ func _draw_skills() -> void:
 		var key := "被动" if passive else ("F" if p.id == "p2" else ("右Shift" if world.input_mode == "versus" else "Q"))
 		if not passive and _pad(p.id):
 			key = _pad_label(p.id, "skill", "X")
+		if not network_player.is_empty() and not passive:
+			key = "远端" if p.id != network_player else (_pad_label("p1", "skill", "X") if _pad("p1") else InputSettings.first_key_label("p1_skill"))
 		var key_w := maxf(40, UIDraw.measure(key, 11, 700, "mono") + 12)
 		var w := maxf(230, key_w + 180)
 		var height := 40.0
