@@ -146,7 +146,7 @@
 
 ## 下载与运行
 
-1. 到 [Releases](https://github.com/Panyusure/BombitGodot/releases/latest) 下载 `BombIt-Godot-v1.0-win64.zip`。
+1. 到 [Releases](https://github.com/Panyusure/BombitGodot/releases/latest) 下载 `BombIt-Godot-v2.0-win64.zip`。
 2. 解压到任意目录，双击 **`启动游戏.bat`**（或直接运行 `BombitGodot.exe`）。
 3. `BombitGodot.exe` 和 `BombitGodot.pck` 必须放在同一目录，别只拷一个。
 
