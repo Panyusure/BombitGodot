@@ -120,8 +120,8 @@ func step() -> void:
 		if role == "client":
 			# Valid connection, invalid requests: a stale epoch and impossible axis
 			# must not poison sequencing or allow lobby changes during a match.
-			session._input_packet.rpc_id(1, session.epoch - 1, 99999, 1, 0, 0, 0)
-			session._input_packet.rpc_id(1, session.epoch, 99999, 999, 0, 0, 0)
+			session._input_batch.rpc_id(1, session.epoch - 1, session.input_generation, PackedInt32Array([99999, 1, 0, 0, 0, 0]))
+			session._input_batch.rpc_id(1, session.epoch, session.input_generation, PackedInt32Array([99999, 999, 0, 0, 0, 0]))
 			session._request_choice.rpc_id(1, 5)
 			session.start_game()
 		stage = 1 if stage == 0 else 4

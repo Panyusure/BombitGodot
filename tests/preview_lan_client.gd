@@ -31,6 +31,18 @@ func run() -> void:
 			await process_frame
 		if main.lan.phase in ["loading", "playing"]:
 			await create_timer(1).timeout
+			var press := InputEventKey.new()
+			press.keycode = KEY_LEFT
+			press.pressed = true
+			Input.parse_input_event(press)
+			Input.flush_buffered_events()
+			await create_timer(0.2).timeout
+			var release := InputEventKey.new()
+			release.keycode = KEY_LEFT
+			release.pressed = false
+			Input.parse_input_event(release)
+			Input.flush_buffered_events()
+			print("LAN_PREDICTED_VIEW=%s" % str(main._views["p2"].actor == main.lan.prediction.actor and main._views["p2"].actor != main.world.players[1]))
 			await capture("battle")
 			await create_timer(3).timeout
 	main._to_menu()

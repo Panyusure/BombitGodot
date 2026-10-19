@@ -477,7 +477,16 @@ func _process(delta: float) -> void:
 	for id in _views.keys():
 		var v = _views[id]
 		if is_instance_valid(v):
-			v.update_view(alpha, view_time, delta)
+			if mode == "lan" and not lan.host and id == "p2":
+				if state == State.PLAY and lan.prediction.actor != null:
+					v.actor = lan.prediction.actor
+					v.update_view(Engine.get_physics_interpolation_fraction(), view_time, delta)
+					v.position += lan.prediction.draw_offset(world, delta)
+				else:
+					v.actor = world.player_by_id(id)
+					v.update_view(alpha, view_time, delta)
+			else:
+				v.update_view(alpha, view_time, delta)
 	for id in _bomb_views.keys():
 		var bv = _bomb_views[id]
 		if not is_instance_valid(bv):
@@ -645,6 +654,8 @@ func _read_player(id: String, _slot: int) -> Dictionary:
 	var hy = int(down) - int(up)
 	var actor_id := "p%d" % (lan.slot + 1) if mode == "lan" else id
 	var p = world.player_by_id(actor_id)
+	if mode == "lan" and not lan.host and lan.prediction.actor != null:
+		p = lan.prediction.actor
 	if p != null and hx != 0 and hy != 0:
 		var last: Vector2i = _last_dir.get(id, Vector2i.ZERO)
 		if last.x == 0:

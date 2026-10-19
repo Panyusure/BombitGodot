@@ -78,12 +78,12 @@ func unit_checks() -> void:
 	connection.phase = "playing"
 	connection.guest = 999
 	connection.epoch = 9
-	connection._input_packet(9, 1, 1, 0, 0, 0)
-	check(connection.remote_input.is_empty() and connection.last_input_seq == -1, "requests without an authenticated remote peer are rejected")
+	connection._input_batch(9, 1, PackedInt32Array([1, 1, 0, 0, 0, 0]))
+	check(connection.input_buffer.commands.is_empty() and connection.input_buffer.acknowledged == 0, "requests without an authenticated remote peer are rejected")
 	connection.start_game()
 	check(connection.world == null and connection.phase == "playing", "invalid phase cannot start another match")
 	connection.close()
-	check(connection.guest == 0 and connection.players.is_empty() and connection.world == null and connection.remote_input.is_empty(), "close clears peer identity, room, world and pending input")
+	check(connection.guest == 0 and connection.players.is_empty() and connection.world == null and connection.input_buffer.commands.is_empty() and connection.prediction.actor == null, "close clears peer identity, room, world and pending input")
 	var protocol_client = preload("res://scripts/net/LanSession.gd").new()
 	protocol_client.name = "ProtocolClient"
 	root.add_child(protocol_client)

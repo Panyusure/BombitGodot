@@ -7,7 +7,9 @@ signal game_ended
 signal lobby_returned
 
 const Snapshot = preload("res://scripts/net/NetSnapshot.gd")
-const PROTOCOL := "bombit-lan-1"
+const Inputs = preload("res://scripts/net/NetInputs.gd")
+const Prediction = preload("res://scripts/net/NetPrediction.gd")
+const PROTOCOL := "bombit-lan-2"
 const DEFAULT_PORT := 24566
 var api: SceneMultiplayer
 var peer: ENetMultiplayerPeer
@@ -23,13 +25,11 @@ var world: World
 var epoch := 0
 var snapshot = Snapshot.new()
 var input_seq := 0
-var last_input_seq := -1
 var bomb_serial := 0
 var skill_serial := 0
-var last_bomb := 0
-var last_skill := 0
-var remote_input := {}
-var remote_input_at := 0
+var input_generation := 1
+var input_buffer = Inputs.new()
+var prediction = Prediction.new()
 var snapshot_frame := -1
 var snapshot_at := 0
 var event_seq := 0
@@ -225,19 +225,18 @@ func start_game() -> void:
 	world = GameEngine.create_world({"mode": "versus", "input_mode": "lan",
 		"seed": str(Time.get_ticks_usec()), "chars": players.map(func(p): return Cfg.CHAR_IDS[p["character"]])})
 	started_at = Time.get_ticks_msec()
-	_begin.rpc_id(guest, epoch, snapshot.pack(world))
 	game_started.emit()
+	_begin.rpc_id(guest, epoch, _pack_state())
 	changed.emit()
 
 func _reset_match() -> void:
 	snapshot = Snapshot.new()
 	input_seq = 0
-	last_input_seq = -1
 	bomb_serial = 0
 	skill_serial = 0
-	last_bomb = 0
-	last_skill = 0
-	remote_input = {}
+	input_generation = 1
+	input_buffer = Inputs.new()
+	prediction.reset()
 	snapshot_frame = -1
 	event_seq = 0
 	received_event = 0
@@ -252,6 +251,8 @@ func _begin(match_epoch: int, data: Dictionary) -> void:
 	_reset_match()
 	world = World.new()
 	snapshot.apply(world, data)
+	input_generation = int(data["input_generation"])
+	prediction.initialize(world, input_generation)
 	game_started.emit()
 	_loaded.rpc_id(1, epoch)
 
@@ -272,18 +273,26 @@ func tick(action: Dictionary, dt: float) -> void:
 	if phase != "playing" or world == null:
 		return
 	if not host:
-		input_seq += 1
-		bomb_serial += int(action.get("bomb", false))
-		skill_serial += int(action.get("skill", false))
-		_input_packet.rpc_id(1, epoch, input_seq, int(action.get("hx", 0)), int(action.get("hy", 0)), bomb_serial, skill_serial, String(action.get("axis_pref", "x")))
+		if prediction.pending.size() < Inputs.MAX_PENDING:
+			input_seq += 1
+			bomb_serial += int(action.get("bomb", false))
+			skill_serial += int(action.get("skill", false))
+			prediction.enqueue(world, PackedInt32Array([input_seq, int(action.get("hx", 0)), int(action.get("hy", 0)),
+				bomb_serial, skill_serial, 1 if action.get("axis_pref", "x") == "y" else 0]))
+		_send_inputs(epoch, input_generation, prediction.packet())
 		return
-	var other := remote_input.duplicate()
-	if Time.get_ticks_msec() - remote_input_at > 300:
-		other = {}
-	remote_input["bomb"] = false
-	remote_input["skill"] = false
+	var other := input_buffer.consume()
 	world.player_by_id("p2").axis_pref = String(other.get("axis_pref", "x"))
+	var previous_identity: int = world.map_identity
+	var previous_alive: bool = world.player_by_id("p2").alive
+	var previous_position := Vector2(world.player_by_id("p2").x, world.player_by_id("p2").y)
 	GameEngine.step(world, {"p1": action, "p2": other}, dt)
+	var player = world.player_by_id("p2")
+	var discontinuity: bool = previous_identity != world.map_identity or previous_alive != player.alive \
+		or previous_position.distance_to(Vector2(player.x, player.y)) > Cfg.TILE * 1.5
+	if discontinuity:
+		input_generation += 1
+		input_buffer = Inputs.new()
 	if not world.events.is_empty():
 		event_seq += 1
 		_events.rpc_id(guest, epoch, event_seq, world.events)
@@ -291,29 +300,30 @@ func tick(action: Dictionary, dt: float) -> void:
 	tick_count += 1
 	if world.match.over:
 		phase = "result"
-		_finish.rpc_id(guest, epoch, snapshot.pack(world))
+		_finish.rpc_id(guest, epoch, _pack_state())
 		game_ended.emit()
-	elif tick_count % 3 == 0:
+	elif discontinuity or tick_count % 3 == 0:
 		# Reliable compressed snapshots avoid ENet's unreliable MTU fragmentation;
 		# a separate channel keeps room transitions and effects independent.
-		_state.rpc_id(guest, epoch, var_to_bytes(snapshot.pack(world)).compress(FileAccess.COMPRESSION_DEFLATE))
+		_send_snapshot(epoch, var_to_bytes(_pack_state()).compress(FileAccess.COMPRESSION_DEFLATE))
+
+func _pack_state() -> Dictionary:
+	var data: Dictionary = snapshot.pack(world)
+	data["input_ack"] = input_buffer.acknowledged
+	data["input_generation"] = input_generation
+	return data
+
+func _send_inputs(match_epoch: int, generation: int, packet: PackedInt32Array) -> void:
+	_input_batch.rpc_id(1, match_epoch, generation, packet)
+
+func _send_snapshot(match_epoch: int, packet: PackedByteArray) -> void:
+	_state.rpc_id(guest, match_epoch, packet)
 
 @rpc("any_peer", "call_remote", "unreliable_ordered", 1)
-func _input_packet(match_epoch: int, sequence: int, hx: int, hy: int, bombs: int, skills: int, axis: String = "x") -> void:
-	if not host or guest <= 0 or api.get_remote_sender_id() != guest or phase != "playing" or match_epoch != epoch:
+func _input_batch(match_epoch: int, generation: int, packet: PackedInt32Array) -> void:
+	if not host or guest <= 0 or api.get_remote_sender_id() != guest or phase != "playing" or match_epoch != epoch or generation != input_generation:
 		return
-	if sequence <= last_input_seq or abs(hx) > 1 or abs(hy) > 1 or bombs < last_bomb or skills < last_skill \
-		or bombs > last_bomb + 16 or skills > last_skill + 16 or axis not in ["x", "y"]:
-		return
-	last_input_seq = sequence
-	remote_input["hx"] = hx
-	remote_input["hy"] = hy
-	remote_input["axis_pref"] = axis
-	remote_input["bomb"] = remote_input.get("bomb", false) or bombs > last_bomb
-	remote_input["skill"] = remote_input.get("skill", false) or skills > last_skill
-	last_bomb = bombs
-	last_skill = skills
-	remote_input_at = Time.get_ticks_msec()
+	input_buffer.receive(packet)
 
 @rpc("authority", "call_remote", "reliable", 1)
 func _state(match_epoch: int, packet: PackedByteArray) -> void:
@@ -326,6 +336,13 @@ func _state(match_epoch: int, packet: PackedByteArray) -> void:
 	if int(data["frame"]) <= snapshot_frame:
 		return
 	snapshot.apply(world, data)
+	var generation: int = data["input_generation"]
+	if generation != input_generation:
+		input_generation = generation
+		input_seq = 0
+		bomb_serial = 0
+		skill_serial = 0
+	prediction.reconcile(world, int(data["input_ack"]), generation)
 	snapshot_frame = world.frame
 	snapshot_at = Time.get_ticks_msec()
 
@@ -339,6 +356,7 @@ func _events(match_epoch: int, sequence: int, events: Array) -> void:
 func _finish(match_epoch: int, data: Dictionary) -> void:
 	if not host and phase == "playing" and match_epoch == epoch:
 		snapshot.apply(world, data)
+		prediction.reset()
 		phase = "result"
 		game_ended.emit()
 
@@ -350,6 +368,7 @@ func return_lobby() -> void:
 		return
 	phase = "lobby"
 	world = null
+	_reset_match()
 	for player in players:
 		player["ready"] = false
 		player["confirmed"] = false
@@ -368,6 +387,7 @@ func _back(match_epoch: int) -> void:
 	if not host and phase == "result" and match_epoch == epoch:
 		phase = "lobby"
 		world = null
+		_reset_match()
 		lobby_returned.emit()
 		changed.emit()
 
@@ -378,6 +398,7 @@ func _peer_left(id: int) -> void:
 		return
 	guest = 0
 	world = null
+	_reset_match()
 	phase = "lobby"
 	players[1]["online"] = false
 	players[1]["peer"] = 0
