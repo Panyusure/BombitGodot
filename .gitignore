@@ -29,3 +29,6 @@ Desktop.ini
 # ── Python 工具缓存 ──────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
+
+# 选角海报原始素材（40MB 的宣发图，用 tools_prepare_posters.py 生成 assets/characters/poster/）
+高清海报/

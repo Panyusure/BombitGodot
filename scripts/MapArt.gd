@@ -681,21 +681,31 @@ static func _spark_xform(ci: CanvasItem, origin: Vector2, c: Vector2, size: floa
 	poly_fill(ci, out, color)
 
 ## Canvas setLineDash 的圆弧版本，含 lineDashOffset 相位。
+## 虚线弧：整圈只发一次 draw_multiline。
+## 早先每段虚线单独 draw_polyline，半径 150 的一圈就是 80 次绘制调用；
+## 未来连发炸弹时同时存在 3~4 个脉动特效，光这一项就吃掉好几毫秒。
 static func _dashed_arc(ci: CanvasItem, cx: float, cy: float, r: float, color: Color,
 		width: float, dash: float, gap: float, offset: float) -> void:
-	if r <= 0.0:
+	if r <= 0.0 or color.a <= 0.0:
 		return
 	var circ := TAU * r
 	var period := dash + gap
 	if period <= 0.0:
 		return
-	var t := -offset
+	# 虚线段只有几像素长，用弦代替弧肉眼无差；相位取模保证首尾同相位。
+	var t := -fposmod(offset, period)
+	var pts := PackedVector2Array()
 	while t < circ:
-		var d0 := maxf(t, 0.0) / r
-		var d1 := minf(t + dash, circ) / r
+		var d0 := maxf(t, 0.0)
+		var d1 := minf(t + dash, circ)
 		if d1 > d0:
-			CanvasArt.stroke(ci, CanvasArt.arc_pts(cx, cy, r, r, 0.0, d0, d1, 0.15), color, width, false)
+			var a0 := d0 / r
+			var a1 := d1 / r
+			pts.append(Vector2(cx + cos(a0) * r, cy + sin(a0) * r))
+			pts.append(Vector2(cx + cos(a1) * r, cy + sin(a1) * r))
 		t += period
+	if pts.size() >= 4:
+		ci.draw_multiline(pts, color, width)
 
 ## 原作 sprites.drawSoulPulse：脉动方框 + 径向辉光 + 三圈（中间一圈虚线）+ 双旋臂 + 星屑。
 static func _soul_pulse(ci: CanvasItem, fx: Dictionary, phase: float, ga: float) -> void:
@@ -711,10 +721,10 @@ static func _soul_pulse(ci: CanvasItem, fx: Dictionary, phase: float, ga: float)
 			else Color(139 / 255.0, 232 / 255.0, 249 / 255.0, 0.13), ga))
 	CanvasArt.stroke(ci, box, _ga(fx["color"], ga), 2.0, true)
 	CanvasArt.fill_radial_gradient(ci, box, Vector2(fx_x, fx_y), 2.0, Vector2(fx_x, fx_y), half, [
-		[0.0, _ga(Color(255 / 255.0, 238 / 255.0, 255 / 255.0, 0.6) if evolved
-			else Color(217 / 255.0, 253 / 255.0, 255 / 255.0, 0.5), ga)],
-		[1.0, _ga(Color(135 / 255.0, 223 / 255.0, 252 / 255.0, 0.0), ga)],
-	])
+		[0.0, Color(255 / 255.0, 238 / 255.0, 255 / 255.0, 0.6) if evolved
+			else Color(217 / 255.0, 253 / 255.0, 255 / 255.0, 0.5)],
+		[1.0, Color(135 / 255.0, 223 / 255.0, 252 / 255.0, 0.0)],
+	], Color(1, 1, 1, ga))
 	for ring in 3:
 		var rr: float = 8.0 + (half - 8.0) * minf(1.0, phase * 1.6 + ring * 0.18)
 		var rc := _ga(Color("#edb7f4") if ring % 2 == 1 else Color("#a5efff"), ga)
@@ -749,9 +759,9 @@ static func _flame_reflect(ci: CanvasItem, fx: Dictionary, phase: float, ga: flo
 		_ga(Color(255 / 255.0, 150 / 255.0, 70 / 255.0, 0.14), ga))
 	CanvasArt.stroke(ci, box, _ga(fx["color"], ga), 2.0, true)
 	CanvasArt.fill_radial_gradient(ci, box, Vector2(fx_x, fx_y), 3.0, Vector2(fx_x, fx_y), half, [
-		[0.0, _ga(Color(255 / 255.0, 236 / 255.0, 180 / 255.0, 0.55), ga)],
-		[1.0, _ga(Color(255 / 255.0, 110 / 255.0, 40 / 255.0, 0.0), ga)],
-	])
+		[0.0, Color(255 / 255.0, 236 / 255.0, 180 / 255.0, 0.55)],
+		[1.0, Color(255 / 255.0, 110 / 255.0, 40 / 255.0, 0.0)],
+	], Color(1, 1, 1, ga))
 	var grow: float = half * minf(1.0, phase * 1.35)
 	CanvasArt.ellipse_rot_stroke(ci, fx_x, fx_y, grow, grow, 0.0, _ga(Color("#ffd08a"), ga),
 		3.0 * (1.0 - phase) + 1.0)
@@ -772,10 +782,10 @@ static func _soul_awaken(ci: CanvasItem, x: float, y: float, phase: float, ga: f
 		Vector2(x + 30.0 + power * 12.0, y - 145.0),
 		Vector2(x + 10.0 + power * 18.0, y + 16.0),
 	]), Vector2(x, y - 145.0), Vector2(x, y + 20.0), [
-		[0.0, _ga(Color(155 / 255.0, 235 / 255.0, 255 / 255.0, 0.0), ga)],
-		[0.55, _ga(Color(204 / 255.0, 249 / 255.0, 255 / 255.0, 0.2), ga)],
-		[1.0, _ga(Color(244 / 255.0, 207 / 255.0, 255 / 255.0, 0.45), ga)],
-	])
+		[0.0, Color(155 / 255.0, 235 / 255.0, 255 / 255.0, 0.0)],
+		[0.55, Color(204 / 255.0, 249 / 255.0, 255 / 255.0, 0.2)],
+		[1.0, Color(244 / 255.0, 207 / 255.0, 255 / 255.0, 0.45)],
+	], Color(1, 1, 1, ga))
 	# translate(0,12) → scale(1,.36) → rotate(phase*2)：三个同心圆变成压扁并旋转的椭圆。
 	var origin := Vector2(x, y + 12.0)
 	var radii := [34.0, 48.0, 62.0]

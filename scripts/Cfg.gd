@@ -12,7 +12,7 @@ const FIELD_W = TILE * COLS          # 720
 const FIELD_H = TILE * ROWS          # 624
 const VIEW_W = FIELD_W               # 720
 const VIEW_H = FIELD_H + HUD_H       # 696
-const VERSION = "v2.3-godot"
+const VERSION = "v2.2-godot"
 
 # ---------- 玩家 ----------
 const BOX = 36.0

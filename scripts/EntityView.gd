@@ -7,11 +7,37 @@ extends Node2D
 static var _tex_cache := {}
 
 ## 动效参数：原作 assets/characters.js 每个角色自带 motion，缺省见 assets.js:22 DEFAULT_MOTION。
-const MOTION_DEFAULT = {"bounce": 4.0, "wobble": 4.0, "breathe": 0.04, "squash": 0.22}
-const MOTION_BY_ID = {
-	"weilai": {"bounce": 3.0, "wobble": 3.0, "breathe": 0.025, "squash": 0.18},
-	"weilai-awakened": {"bounce": 2.0, "wobble": 1.5, "breathe": 0.012, "squash": 0.1},
+## 键必须**齐全**：没有氛围层脚本的角色（未来 / 觉醒形态）只吃这一份默认值，
+## 缺键会在 update_view 里直接报 "Invalid access to property or key"。
+const MOTION_DEFAULT = {
+	"bounce": 4.0,     # 行走弹跳高度 px
+	"wobble": 4.0,     # 行走摇摆角度 deg
+	"stride": 11.0,    # 步频 rad/s
+	"sway": 1.4,       # 重心横移 px
+	"lean": 2.5,       # 前进方向倾斜 deg
+	"breathe": 0.04,   # 静止呼吸幅度
+	"idle_rate": 2.4,  # 静止呼吸频率 rad/s
+	"squash": 0.22,    # 落地压扁系数
 }
+const MOTION_BY_ID = {
+	"weilai": {"bounce": 3.0, "wobble": 3.0, "stride": 10.8, "sway": 1.2, "lean": 1.8,
+		"breathe": 0.025, "idle_rate": 2.2, "squash": 0.18},
+	"weilai-awakened": {"bounce": 2.0, "wobble": 1.5, "stride": 9.0, "sway": 0.6, "lean": 0.8,
+		"breathe": 0.012, "idle_rate": 1.6, "squash": 0.1},
+}
+
+## 每个角色自己的氛围层脚本（「未来」已有 SoulGlow 通灵柔光，不在此列）。
+## 用 res:// 路径 load，而不是 class_name：新增文件不必等编辑器注册全局类，
+## 也让 5 个角色可以各写一个文件、互不干扰。
+const AURA_PATHS = {
+	"xiaonuo": "res://scripts/char_fx/xiaonuo_aura.gd",
+	"axiu": "res://scripts/char_fx/axiu_aura.gd",
+	"arui": "res://scripts/char_fx/arui_aura.gd",
+	"xiaoyan": "res://scripts/char_fx/xiaoyan_aura.gd",
+	"xiaotian": "res://scripts/char_fx/xiaotian_aura.gd",
+}
+
+static var _aura_scripts := {}
 const TAG_SIZE = 13
 const TAG_HALF_W = 50.0
 const PLAYER_ANCHOR_Y = 18.0   # CFG.BOX / 2：玩家脚底（sprites.js:816）
@@ -40,11 +66,25 @@ var _sx := 1.0
 var _sy := 1.0
 var _flip := 1.0
 var _bloom := 1.0
+var _sway := 0.0       # 行走时的重心横移（px），影子与立绘共用
+var _lift := 0.0       # 步态抬脚高度 0..1（0 = 触地），影子收缩与扬尘靠它
+var _energy := 0.0     # 氛围层强度，静止时衰减以省掉大部分绘制
+var _motion: Dictionary = MOTION_DEFAULT.duplicate()
+
+# 1P/2P 标签的缓存：Label 的主题覆盖 / 尺寸每帧重设会触发一次
+# NOTIFICATION_THEME_CHANGED + 重新排版，两个玩家就是每帧两次无谓开销。
+var _tag_font: Font = null
+var _tag_half_line := 0.0
+var _tag_color := Color(0, 0, 0, 0)
+var _tag_text := ""
+var _tag_cy := 0.0
 
 ## 通灵柔光（只给「未来」觉醒形态）。挂在 pivot 下，跟随弹跳/倾斜/翻转。
 var show_tag := true
 var soul_enabled := true
 var _soul_glow: SoulGlow = null
+## 角色氛围层（小诺 / 阿修 / 阿瑞 / 小炎 / 小天），「未来」用 SoulGlow。
+var _aura: Node2D = null
 
 ## 当前显示的通灵形态（原作 assets.js:240 visualId）。
 func _visual_id() -> String:
@@ -57,6 +97,10 @@ func _visual_id() -> String:
 func setup(a: Actor, _f: Font) -> void:
 	actor = a
 	is_enemy = a.is_enemy
+	# 立绘保真：素材是 560px 原图、导入为无损（compress/mode=0）且不缩放（size_limit=0），
+	# 这里刻意**不开 mipmap**。mip 链在三线性过渡处会把细节混掉，小尺寸显示时反而更糊；
+	# 宁可保留一点行走时的采样闪烁，也要保住脸和轮廓的清晰度。
+	texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
 	pivot = Node2D.new()
 	add_child(pivot)
 	sprite = Sprite2D.new()
@@ -71,6 +115,10 @@ func setup(a: Actor, _f: Font) -> void:
 		_soul_glow.bloom_strength = 0.35
 		pivot.add_child(_soul_glow)
 		_soul_glow.visible = false
+	# 其余五位的氛围层：每人一个脚本，挂在同一 pivot 下，自动跟随弹跳/倾斜/翻转。
+	_aura = _make_aura(a)
+	if _aura != null:
+		pivot.add_child(_aura)
 	# 立绘改由 _draw() 里的 _draw_sprite() 画（见该函数注释）：
 	# Node2D 自身的 _draw 恒在子节点之下，若继续让 Sprite2D 渲染，
 	# 「白闪 / 光环 / 护盾 / 星星」会被整体压到立绘背后，而原作是画在其上。
@@ -78,14 +126,56 @@ func setup(a: Actor, _f: Font) -> void:
 	sprite.visible = false
 	tag = Label.new()
 	tag.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	tag.add_theme_font_override("font", UIDraw.font("cn", 900))
+	_tag_font = UIDraw.font("cn", 900)
+	tag.add_theme_font_override("font", _tag_font)
 	tag.add_theme_font_size_override("font_size", TAG_SIZE)
 	tag.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.55))
 	tag.add_theme_constant_override("outline_size", 3)
+	if _tag_font != null:
+		_tag_half_line = (_tag_font.get_ascent(TAG_SIZE) + _tag_font.get_descent(TAG_SIZE)) * 0.5
 	tag.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	tag.z_index = 20
+	tag.size = Vector2(TAG_HALF_W * 2.0, 20)
 	add_child(tag)
 	_refresh_texture(true)
+
+## 取某角色的氛围层脚本（按需 load，结果缓存）。文件不存在时返回 null，
+## 于是「没写氛围层的角色」自动退化成原来的纯立绘动效，不会报错。
+static func _aura_script(id: String) -> Script:
+	if _aura_scripts.has(id):
+		return _aura_scripts[id]
+	var path: String = String(AURA_PATHS.get(id, ""))
+	var script: Script = null
+	if path != "" and ResourceLoader.exists(path):
+		script = load(path)
+	_aura_scripts[id] = script
+	return script
+
+func _make_aura(a: Actor) -> Node2D:
+	if a.is_enemy:
+		return null
+	var script: Script = _aura_script(a.asset_id)
+	if script == null:
+		return null
+	var node = script.new()
+	if node is Node2D:
+		return node
+	return null
+
+## 氛围层是否已接管地面投影（水镜 / 长影），是则不再画默认椭圆落影。
+func _owns_ground() -> bool:
+	return _aura != null and _aura.has_method("owns_ground") and bool(_aura.owns_ground())
+
+## 动效参数合成：通用默认 → 少数按 id 定制的常数 → 角色氛围层自带的 motion()。
+## 只在立绘/形态变化时算一次，update_view 里直接用缓存，避免每帧做字典查找与字符串比较。
+func _resolve_motion() -> Dictionary:
+	var out: Dictionary = MOTION_DEFAULT.duplicate()
+	var id := _visual_id()
+	if MOTION_BY_ID.has(id):
+		out.merge(MOTION_BY_ID[id], true)
+	if _aura != null and _aura.has_method("motion"):
+		out.merge(_aura.motion(), true)
+	return out
 
 func _load_tex(path: String) -> Texture2D:
 	if _tex_cache.has(path):
@@ -149,6 +239,10 @@ func _refresh_texture(force: bool = false) -> void:
 			_soul_glow.configure(_tex, _display, _anchor)
 		else:
 			_soul_glow.clear()
+	if not is_enemy:
+		_motion = _resolve_motion()
+	if _aura != null:
+		_aura.configure(_tex, _display, _anchor)
 
 func update_view(alpha: float, time_now: float, delta: float) -> void:
 	if actor == null:
@@ -176,6 +270,8 @@ func update_view(alpha: float, time_now: float, delta: float) -> void:
 	var wob := 0.0
 	var sx := 1.0
 	var sy := 1.0
+	var sway := 0.0
+	var lift := 0.0
 	_alpha = 1.0
 	if is_enemy:
 		# sprites.js:1055-1057：弹跳与死亡（0.7s 淡出 + 纵向压扁 0.65）
@@ -185,18 +281,38 @@ func update_view(alpha: float, time_now: float, delta: float) -> void:
 			_alpha = 1.0 - dead_t
 			sy = 0.65
 	else:
-		var m: Dictionary = MOTION_BY_ID.get(_visual_id(), MOTION_DEFAULT)
+		# 播放角色：四相步态（触地 → 顶起 → 触地 → 顶起）。
+		# 旧版只有 -abs(sin) 的上下位移 + 平摆，没有落地压扁、重心横移、发力前倾，
+		# 六个角色读起来是同一张会抖的贴纸；这里补上「重量」和「朝哪边使劲」。
+		var m: Dictionary = _motion
+		var st := float(m["squash"])
 		if actor.alive:
 			if actor.moving:
-				var ph := _time * 11.0
-				bob = -absf(sin(ph)) * float(m["bounce"])
-				wob = sin(ph) * (float(m["wobble"]) * PI / 180.0)
+				var ph := _time * float(m["stride"])
+				var wave := sin(ph)
+				# pow(0.82)：顶部更「悬」、触地更干脆，比纯 |sin| 更有弹性
+				lift = pow(absf(wave), 0.82)
+				bob = -lift * float(m["bounce"])
+				wob = wave * deg_to_rad(float(m["wobble"]))
+				sway = wave * float(m["sway"])
+				# 触地压扁 / 顶点拉伸 —— Q 版步态的重量感几乎全靠这一项
+				var contact := pow(1.0 - lift, 3.0)
+				var apex := pow(lift, 4.0)
+				var squeeze := st * (contact * 0.55 - apex * 0.18)
+				sx = 1.0 + squeeze
+				sy = 1.0 - squeeze
+				# 前倾只给左右移动：上下移动时整张贴图倾斜会读成「摔倒」，
+				# 背面素材一斜还会露出侧边，所以只按左右朝向压一点。
+				if actor.facing_dir == "left" or actor.facing_dir == "right":
+					wob += deg_to_rad(float(m["lean"])) * float(actor.facing) * (0.35 + 0.65 * lift)
 			else:
-				var br := sin(_time * 2.4) * float(m["breathe"])
+				var br := sin(_time * float(m["idle_rate"])) * float(m["breathe"])
 				sx = 1.0 + br
 				sy = 1.0 - br * 0.6
+				# 待机时重心极慢地漂一点，避免「立绘贴纸」的僵直感
+				sway = sin(_time * float(m["idle_rate"]) * 0.5) * float(m["sway"]) * 0.35
 			if actor.squash > 0.0:
-				var s: float = actor.squash * float(m["squash"])
+				var s: float = actor.squash * st
 				sx *= 1.0 + s
 				sy *= 1.0 - s
 		else:
@@ -217,11 +333,13 @@ func update_view(alpha: float, time_now: float, delta: float) -> void:
 		bloom = 1.0 + sin(PI * (1.0 - actor.soul_awaken_time / 1.6)) * 0.07
 	_bob = bob
 	_wob = wob
+	_sway = sway
+	_lift = lift
 	_sx = sx
 	_sy = sy
 	_flip = flip
 	_bloom = bloom
-	pivot.position = Vector2(0, bob)
+	pivot.position = Vector2(sway, bob)
 	pivot.rotation = wob
 	pivot.scale = Vector2(flip * sx * bloom, sy * bloom)
 	sprite.modulate = Color(1, 1, 1, _alpha)
@@ -230,19 +348,40 @@ func update_view(alpha: float, time_now: float, delta: float) -> void:
 		_soul_glow.visible = show_soul
 		if show_soul:
 			_soul_glow.update_soul(_time, actor.soul_awaken_time, delta)
+	if _aura != null:
+		var show_aura: bool = actor.alive and _tex != null
+		if _aura.visible != show_aura:
+			_aura.set_visible_layers(show_aura)
+		if show_aura:
+			# 静止时把能量压到 0.62：氛围层仍成立，但各角色可以按 energy 省掉大部分绘制
+			var target := 1.0 if actor.moving else 0.62
+			_energy = lerpf(_energy, target, clampf(delta * 6.0, 0.0, 1.0))
+			_aura.moving = actor.moving
+			_aura.alive = actor.alive
+			_aura.facing = actor.facing
+			_aura.bob = bob
+			_aura.energy = _energy
+			_aura.cast = clampf(actor.cast_flash / 0.8, 0.0, 1.0)
+			_aura.actor = actor
+			_aura.advance(delta)
+		else:
+			_energy = 0.0
 	# 1P / 2P 标签（sprites.js:1151-1160：文字中心在 p.y - (130 | 62) + sin(time*3)*1.5）
 	if not is_enemy:
 		tag.visible = actor.alive and show_tag
-		tag.text = "1P" if actor.id == "p1" else "2P"
-		tag.add_theme_color_override("font_color", actor.color)
-		var tag_cy := (-130.0 if (actor.asset_id == "weilai" and actor.soul_evolved) else -62.0) - PLAYER_ANCHOR_Y
-		# Label 顶对齐：文字中心 = 顶部 + (ascent + descent) / 2。
-		var half_line := 0.0
-		var f := UIDraw.font("cn", 900)
-		if f != null:
-			half_line = (f.get_ascent(TAG_SIZE) + f.get_descent(TAG_SIZE)) * 0.5
-		tag.position = Vector2(-TAG_HALF_W, tag_cy + sin(_time * 3.0) * 1.5 - half_line)
-		tag.size = Vector2(TAG_HALF_W * 2.0, 20)
+		var want := "1P" if actor.id == "p1" else "2P"
+		if want != _tag_text:
+			_tag_text = want
+			tag.text = want
+		# 主题覆盖只在颜色真的变了才设：每帧 add_theme_color_override 会触发
+		# NOTIFICATION_THEME_CHANGED 并让 Label 重新排版，等于每帧白烧两次布局。
+		if actor.color != _tag_color:
+			_tag_color = actor.color
+			tag.add_theme_color_override("font_color", _tag_color)
+		# 觉醒形态的立绘高出近一倍，标签要跟着抬到头顶之上
+		_tag_cy = (-130.0 if (actor.asset_id == "weilai" and actor.soul_evolved) else -62.0) - PLAYER_ANCHOR_Y
+		# Label 顶对齐：文字中心 = 顶部 + (ascent + descent) / 2（该值已在 setup 里缓存）
+		tag.position = Vector2(-TAG_HALF_W, _tag_cy + sin(_time * 3.0) * 1.5 - _tag_half_line)
 	else:
 		tag.visible = false
 	queue_redraw()
@@ -255,9 +394,23 @@ func _draw() -> void:
 	if actor.alive:
 		if is_enemy:
 			MapArt.ground_shadow(self, 0, -1, 32.0 if boss else 15.0, 9.0 if boss else 5.0, 0.22)
-		else:
-			var shrink := 1.0 - absf(_bob) / 26.0
-			MapArt.ground_shadow(self, 0, 0, 15.0 * shrink, 5.4 * shrink, 0.26)
+		elif not _owns_ground():
+			# 影子跟着重心横移 35%、随抬脚收缩。原来按 bob 像素估收缩，
+			# 换个角色参数就失准；_lift 是归一化的抬脚高度，任何角色都贴合。
+			# 外层柔、内层实：脚底才真的像压在地上，而不是贴了一张灰饼。
+			var shrink := 1.0 - _lift * 0.40
+			var shx := _sway * 0.35
+			MapArt.ground_shadow(self, shx, 0.6, 17.0 * shrink, 6.2 * shrink, 0.20)
+			MapArt.ground_shadow(self, shx, 0.0, 10.5 * shrink, 3.8 * shrink, 0.15)
+		# ---- 脚步扬尘：从步态相位反推「离上次触地多久」，不需要额外的状态机 ----
+		if actor.moving and not is_enemy:
+			var stride := maxf(0.001, float(_motion["stride"]))
+			var since := fposmod(_time * stride, PI) / stride
+			if since < 0.17:
+				var u := since / 0.17
+				var rr := 8.0 + u * 15.0
+				MapArt.ellipse_stroke(self, _sway * 0.5, 0.0, rr, rr * 0.33,
+					Color(20 / 255.0, 26 / 255.0, 45 / 255.0, 0.20 * (1.0 - u)), 1.5)
 	if is_enemy:
 		# 原作敌人的光环 / 提示都画在 translate(px, py + 14 + bob) 之内（sprites.js:1061），随弹跳位移。
 		var by := _bob
@@ -345,10 +498,9 @@ func _draw_sprite() -> void:
 	var tex: Texture2D = sprite.texture if sprite != null else null
 	if tex == null or _display.x <= 0.0 or _display.y <= 0.0:
 		return
-	draw_set_transform(Vector2(0, _bob), _wob, Vector2(_flip * _sx * _bloom, _sy * _bloom))
+	draw_set_transform(Vector2(_sway, _bob), _wob, Vector2(_flip * _sx * _bloom, _sy * _bloom))
 	# 敌人的立绘另有 +2 / +8 的脚底微调（sprites.js:1085-1092）。
 	var eoff := 0.0 if not is_enemy else (8.0 if actor.type == "boss" else 2.0)
 	var off := Vector2(-_display.x * _anchor.x, -_display.y * _anchor.y + eoff)
 	draw_texture_rect(tex, Rect2(off.x, off.y, _display.x, _display.y), false, Color(1, 1, 1, _alpha))
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
-

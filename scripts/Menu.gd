@@ -42,9 +42,32 @@ const BTN := {"w": 360.0, "h": 56.0, "y": 566.0}
 const REPLAY_BTN := {"x": 544.0, "y": 22.0, "w": 118.0, "h": 38.0}
 const SETTINGS_BTN := {"x": 670.0, "y": 24.0, "w": 32.0, "h": 34.0}
 const BACK_BTN := {"x": 20.0, "y": 566.0, "w": 136.0, "h": 56.0}
+## 主菜单里「退出游戏」压在「进入精灵选择」正下方，做成一条紧凑的次级按钮。
+const QUIT_BTN := {"x": 240.0, "y": 612.0, "w": 240.0, "h": 32.0}
+const QUIT_ARM_TIME := 2.6
 const MODE_CARD := {"x": 20.0, "y": 226.0, "w": 218.0, "h": 314.0, "gap": 13.0}
-const GRID := {"x": 20.0, "y": 450.0, "w": 106.0, "h": 80.0, "gapX": 8.0, "cols": 6}
-const POSTER := {"x": 20.0, "y": 128.0, "w": 680.0, "h": 310.0}
+const GRID := {"x": 20.0, "y": 478.0, "w": 106.0, "h": 80.0, "gapX": 8.0, "cols": 6}
+## 墨底上的正文色（奶油）
+const MENU_SOFT := Color(245 / 255.0, 235 / 255.0, 216 / 255.0)
+## 单人精灵选择：海报横幅舞台。
+## 六张海报都是横版宣发图（1.77 ~ 3.10 宽高比），铺满 720×696 只会裁成大头照；
+## 所以海报放在 720×322 的横幅里，整张构图（人物全身 + 场景）都能看到，
+## 文案压在横幅底部的「片尾字幕带」上，抬头和卡牌上下是墨底。
+const BAND := {"x": 0.0, "y": 124.0, "w": 720.0, "h": 338.0}
+const BAND_BOTTOM := 462.0
+## 海报取景（归一化）：focus = 海报里「脸」的位置，zoom = 竖向取景比例。
+## zoom = 1 表示整张海报的高度都看得到，个别偏窄的海报会自动退到 1 以下。
+## 海报里「脸」的位置：整张主图不裁切，push 推镜和光效爆发都以它为锚点。
+const POSTER_ART := {
+	"xiaonuo": {"focus": Vector2(0.47, 0.13), "zoom": 1.0},
+	"axiu": {"focus": Vector2(0.31, 0.22), "zoom": 1.0},
+	"arui": {"focus": Vector2(0.42, 0.40), "zoom": 1.0},
+	"xiaoyan": {"focus": Vector2(0.31, 0.19), "zoom": 1.0},
+	"xiaotian": {"focus": Vector2(0.325, 0.37), "zoom": 1.0},
+	"weilai": {"focus": Vector2(0.42, 0.34), "zoom": 1.0},
+}
+## 人物在画框里的落点（画框归一化坐标）：横向居中，纵向偏上，给底部字幕带让地方。
+const ART_ANCHOR := Vector2(0.50, 0.36)
 const SETTINGS_CARD := {"x": 60.0, "y": 38.0, "w": 600.0, "h": 620.0}
 ## 焦点方向键首次重复延迟 / 之后每格间隔（秒）
 const NAV_FIRST_DELAY := 0.35
@@ -108,6 +131,17 @@ var wallpaper: Texture2D = null
 var char_tex := {}
 var versus_lobby: Control
 
+# ---- 海报舞台状态 ----
+var poster_tex := {}          # cid -> 海报贴图
+var poster_cid := ""          # 当前画着的海报
+var poster_prev := ""         # 刚被换下的海报（切换时交叉溶解）
+var poster_mix := 1.0         # 0 = 还是旧海报，1 = 新海报完全接管
+var stage_t := 1.0            # 进入本屏后的时间（开场拉幕 / 推镜）
+var burst_t := 1.0            # 换角色后的爆发计时（闪白 / 冲击环 / 速度线）
+var last_switch_t := -10.0    # 上一次换角色的时刻：连按时用它压掉闪白
+var quit_armed := false       # 退出按钮是否已进入「再点一次确认」状态
+var quit_arm_t := 0.0         # 待确认状态的剩余秒数
+
 func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_STOP
@@ -134,6 +168,10 @@ func _ready() -> void:
 		var path := "res://assets/characters/%s.png" % cid
 		if ResourceLoader.exists(path):
 			char_tex[cid] = load(path)
+		# 精灵选择用的超大展示海报（tools_prepare_posters.py 从 高清海报/ 生成）
+		var poster_path := "res://assets/characters/poster/%s.webp" % cid
+		if ResourceLoader.exists(poster_path):
+			poster_tex[cid] = load(poster_path)
 	set_process(true)
 
 func setup(_muted: bool) -> void:
@@ -159,6 +197,7 @@ func reset() -> void:
 	settings_only = false
 	capture_target = {}
 	toast_text = ""
+	quit_armed = false
 	step_t = 0.0
 	player = 0
 	switch_t = 1.0
@@ -173,14 +212,34 @@ func _process(delta: float) -> void:
 	# 两者都要按 5×/4× 推进并夹在 1 以内，否则入场动画比原作慢 5 倍且 step_t 会无限增长。
 	step_t = minf(1.0, step_t + delta * 5.0)
 	switch_t = minf(1.0, switch_t + delta * 4.0)
+	stage_t = minf(9.0, stage_t + delta)
+	burst_t = minf(9.0, burst_t + delta)
+	poster_mix = minf(1.0, poster_mix + delta * 4.5)
+	if quit_armed:
+		quit_arm_t -= delta
+		if quit_arm_t <= 0.0:
+			quit_armed = false
 	if toast_time > 0.0:
 		toast_time -= delta
+	_sync_poster(_char(player))
 	versus_lobby.visible = visible and _is_versus_lobby() and not settings_open and not _started and not settings_only
 	if visible:
 		_update_hover()
 		if not _started:
 			_process_nav(delta)
 	queue_redraw()
+
+## 换角色就触发一次海报爆发：旧海报存起来做交叉溶解，新海报从「推近 + 闪白」开始。
+## 连按方向键时（两次换人间隔 < 0.22s）跳过闪白，只保留推镜和冲击环，否则整屏一直在闪。
+func _sync_poster(cid: String) -> void:
+	if cid == poster_cid:
+		return
+	var quick := (t - last_switch_t) < 0.22
+	last_switch_t = t
+	poster_prev = poster_cid
+	poster_cid = cid
+	poster_mix = 0.0
+	burst_t = 0.20 if quick else 0.0
 
 func _mode() -> Dictionary:
 	return MODES[mode_index]
@@ -226,13 +285,20 @@ func _tab_rects() -> Array:
 	return [Rect2(20, 96, 140, 24), Rect2(166, 96, 140, 24)]
 
 func _cta_rect() -> Rect2:
-	return Rect2((Cfg.VIEW_W - BTN["w"]) * 0.5, BTN["y"], BTN["w"], BTN["h"])
+	var x := (Cfg.VIEW_W - BTN["w"]) * 0.5
+	# 主菜单：开始按钮上移，正下方留给「退出游戏」；选角页保持原位
+	if step == "mode":
+		return Rect2(x, 550.0, BTN["w"], 52.0)
+	return Rect2(x, BTN["y"], BTN["w"], BTN["h"])
 
 func _hit(rect: Rect2, p: Vector2) -> bool:
 	return rect.has_point(p)
 
 func _replay_rect() -> Rect2:
 	return Rect2(REPLAY_BTN["x"], REPLAY_BTN["y"], REPLAY_BTN["w"], REPLAY_BTN["h"])
+
+func _quit_rect() -> Rect2:
+	return Rect2(QUIT_BTN["x"], QUIT_BTN["y"], QUIT_BTN["w"], QUIT_BTN["h"])
 
 func _settings_rect() -> Rect2:
 	return Rect2(SETTINGS_BTN["x"], SETTINGS_BTN["y"], SETTINGS_BTN["w"], SETTINGS_BTN["h"])
@@ -258,6 +324,9 @@ func _update_hover() -> void:
 			if _hit(cards[i], p):
 				hover = {"kind": "mode", "index": i}
 				return
+		if _hit(_quit_rect(), p):
+			hover = {"kind": "quit"}
+			return
 		if _hit(_cta_rect(), p):
 			hover = {"kind": "cta"}
 	else:
@@ -316,6 +385,12 @@ func _handle_click(p: Vector2) -> void:
 					mode_index = i
 					switch_t = 0.0
 				return
+		if _hit(_quit_rect(), p):
+			_ui_click()
+			_request_quit()
+			return
+		# 点了别处就撤销待确认状态
+		quit_armed = false
 		if _hit(_cta_rect(), p):
 			_open_character()
 		return
@@ -799,6 +874,7 @@ func _focus_items() -> Array:
 		var cards := _mode_rects()
 		for i in cards.size():
 			out.append({"key": "mode:%d" % i, "rect": cards[i]})
+		out.append({"key": "quit", "rect": _quit_rect()})
 	else:
 		var tabs := _tab_rects()
 		for i in tabs.size():
@@ -1019,6 +1095,9 @@ func _nav_accept() -> void:
 		if key == "cta" or key.begins_with("mode:"):
 			_ui_click()
 			_open_character()
+		elif key == "quit":
+			_ui_click()
+			_request_quit()
 	elif key.begins_with("ptab:"):
 		player = int(key.substr(5))
 		switch_t = 0.0
@@ -1129,6 +1208,10 @@ func _unhandled_input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 		return
 	if key == KEY_ESCAPE:
+		if quit_armed:
+			quit_armed = false
+			queue_redraw()
+			return
 		if step == "chars":
 			_back_to_mode()
 			nav_mode = true
@@ -1152,12 +1235,20 @@ func _open_character() -> void:
 	step_t = 0.0
 	switch_t = 0.0
 	player = 0
+	# 整屏海报：重新拉幕 + 推镜（海报已加载则直接交接，不重复溶解）
+	stage_t = 0.0
+	burst_t = 0.0
+	last_switch_t = -10.0
+	poster_mix = 1.0
+	poster_prev = ""
+	poster_cid = _char(player)
 	nav_focus["menu_chars"] = "card:%d" % int(char_index[player])
 	if _is_versus_lobby():
 		versus_lobby.open(char_index.duplicate())
 
 func _back_to_mode() -> void:
 	versus_lobby.close()
+	quit_armed = false
 	step = "mode"
 	step_t = 0.0
 	switch_t = 0.0
@@ -1186,25 +1277,30 @@ func _confirm() -> void:
 
 func _draw() -> void:
 	if settings_only:
+		_draw_background()
 		_draw_settings()
 		_draw_focus_ring()
 		_draw_toast()
 		return
-	_draw_background()
 	if _is_versus_lobby():
+		_draw_background()
 		if settings_open:
 			_draw_settings()
 			_draw_focus_ring()
 		_draw_toast()
 		return
 	if step == "mode":
+		_draw_background()
 		_draw_header_mode()
 		_draw_mode_section()
 		_draw_mode_cards()
+		_draw_quit()
 	else:
+		# 单人精灵选择 = 海报横幅舞台（联机对战在上面的 _is_versus_lobby 分支已经提前返回）
+		_draw_spirit_stage()
 		_draw_char_header()
 		_draw_player_tabs()
-		_draw_poster()
+		_draw_stage_info()
 		_draw_char_tiles()
 		_draw_back()
 	_draw_replay()
@@ -1213,6 +1309,9 @@ func _draw() -> void:
 	_draw_footer()
 	if settings_open:
 		_draw_settings()
+	elif step != "mode":
+		# 拉幕放在最上层：卡牌 / 按钮也一起被幕布盖住，开场是一次完整的电影式揭示
+		_draw_stage_curtain()
 	_draw_focus_ring()
 	_draw_toast()
 
@@ -1368,6 +1467,7 @@ func _draw_mode_motif(mode: Dictionary, cx: float, cy: float, r: float, selected
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
 func _draw_char_header() -> void:
+	# 这一屏的背景是墨底 + 海报横幅，抬头文字整套用奶油色 + 墨色描边
 	draw_rect(Rect2(0, 0, Cfg.VIEW_W, 18), UIDraw.INK, true, -1.0, true)
 	UIDraw.text(self, "BOMBIT®  /  SPIRIT SELECT", 13, 9,
 		{"size": 11, "family": "mono", "weight": 700, "fill": UIDraw.CREAM, "alpha": 0.82})
@@ -1375,20 +1475,22 @@ func _draw_char_header() -> void:
 		{"size": 11, "family": "mono", "weight": 700, "fill": UIDraw.CREAM, "alpha": 0.55, "align": "right"})
 	UIDraw.text(self, "STEP 02 / SPIRIT SELECT", 24, 33,
 		{"size": 11, "weight": 700, "family": "mono", "fill": UIDraw.CYAN})
+	# 标题：奶油实心 + 墨色描边 + 朱红硬投影
 	UIDraw.text(self, "选择精灵", 22, 61, {"size": 28, "weight": 900, "family": "cn",
-		"fill": UIDraw.INK, "shadow": UIDraw.ORANGE, "shadowX": 3, "shadowY": 3})
+		"fill": MENU_SOFT, "stroke": UIDraw.INK, "strokeWidth": 3,
+		"shadow": UIDraw.ORANGE, "shadowX": 4, "shadowY": 4})
 	UIDraw.text(self, "CHOOSE YOUR SPIRIT  /  6 AVAILABLE", 25, 85,
-		{"size": 11, "weight": 700, "family": "mono", "fill": UIDraw.INK, "alpha": 0.48})
-	draw_line(Vector2(294, 32), Vector2(294, 90), Color(20 / 255.0, 16 / 255.0, 25 / 255.0, 0.18), 1.0, true)
+		{"size": 11, "weight": 700, "family": "mono", "fill": MENU_SOFT, "alpha": 0.58})
+	draw_line(Vector2(294, 32), Vector2(294, 90), Color(MENU_SOFT, 0.18), 1.0, true)
 	var mode := _mode()
 	UIDraw.tag(self, mode["label"], 310, 44, {"size": 11, "family": "cn", "fill": mode["color"],
 		"fg": UIDraw.INK, "padX": 7, "h": 16, "align": "left", "stroke": UIDraw.INK, "lw": 1})
 	UIDraw.text(self, "MODE " + String(mode["no"]) + " / " + String(mode["abbr"]), 310, 66,
-		{"size": 11, "weight": 700, "family": "mono", "fill": UIDraw.INK, "alpha": 0.48})
+		{"size": 11, "weight": 700, "family": "mono", "fill": MENU_SOFT, "alpha": 0.58})
 	var cid := _char(player)
 	UIDraw.text(self, ("2P" if player == 1 else "1P") + " 正在选择  /  " + Cfg.char_cfg(cid)["name"],
 		310, 84, {"size": 11, "weight": 700, "family": "cn", "fill": _player_color()})
-	draw_line(Vector2(20, 92), Vector2(700, 92), Color(20 / 255.0, 16 / 255.0, 25 / 255.0, 0.22), 1.0, true)
+	draw_line(Vector2(20, 92), Vector2(700, 92), Color(MENU_SOFT, 0.20), 1.0, true)
 
 func _draw_player_tabs() -> void:
 	var tabs := _tab_rects()
@@ -1423,91 +1525,262 @@ func _draw_player_tabs() -> void:
 			UIDraw.text(self, "选择中", tr.position.x + tr.size.x - 10, tr.position.y + 14,
 				{"size": 11, "weight": 700, "family": "cn", "fill": UIDraw.YELLOW, "align": "right"})
 
-func _draw_poster() -> void:
+# ---------------- 单人精灵选择：海报横幅舞台 ----------------
+#
+# 版式（720×696）：抬头 0-120 / 海报横幅 124-446 / 卡牌 450-530 / 开始按钮 566-622 / 脚注
+# 海报是横版宣发图，铺满整屏只能裁成大头照；这里把它放进 720×322 的横幅，
+# 取景窗口的宽高比跟着横幅走，整张海报的高度都能看到，人物不再是特写。
+
+func _band_rect() -> Rect2:
+	return Rect2(float(BAND["x"]), float(BAND["y"]), float(BAND["w"]), float(BAND["h"]))
+
+## 海报取景窗口（归一化 UV）。六个角色共用同一个横幅画框（720×322），
+## 只按各自的 focus / zoom 决定看海报的哪一块 —— 所以每张都是同样的尺寸。
+## push > 0 是推镜（窗口等比缩小，人物在窗口里的相对位置不变），pan 是画面内的小幅横移。
+func _poster_uv(cid: String, push: float = 0.0, pan: Vector2 = Vector2.ZERO) -> Rect2:
+	var tex: Texture2D = poster_tex.get(cid)
+	if tex == null:
+		return Rect2(0, 0, 1, 1)
+	var art: Dictionary = POSTER_ART.get(cid, {"focus": Vector2(0.5, 0.35), "zoom": 1.0})
+	var aspect := float(tex.get_width()) / maxf(1.0, float(tex.get_height()))
+	var band_aspect := float(BAND["w"]) / float(BAND["h"])
+	var vh := clampf(float(art.get("zoom", 1.0)), 0.2, 1.0)
+	var ww := vh * band_aspect / aspect
+	if ww > 1.0:
+		ww = 1.0
+		vh = ww * aspect / band_aspect
+	var focus: Vector2 = art["focus"]
+	var x0 := clampf(focus.x - ART_ANCHOR.x * ww, 0.0, 1.0 - ww)
+	var y0 := clampf(focus.y - ART_ANCHOR.y * vh, 0.0, 1.0 - vh)
+	var out := Rect2(x0, y0, ww, vh)
+	var k := 1.0 + maxf(0.0, push)
+	if k > 1.0001:
+		var rx := clampf((focus.x - x0) / ww, 0.0, 1.0)
+		var ry := clampf((focus.y - y0) / vh, 0.0, 1.0)
+		var nw := ww / k
+		var nh := vh / k
+		out = Rect2(clampf(focus.x - rx * nw, 0.0, 1.0 - nw),
+			clampf(focus.y - ry * nh, 0.0, 1.0 - nh), nw, nh)
+	if pan != Vector2.ZERO:
+		out.position = Vector2(
+			clampf(out.position.x + pan.x, 0.0, 1.0 - out.size.x),
+			clampf(out.position.y + pan.y, 0.0, 1.0 - out.size.y))
+	return out
+
+## 把海报画满整个横幅画框：目标矩形恒等于横幅，缩放靠改取景窗口，
+## 所以推镜 / 抖动永远溢不出画框，六张海报的尺寸也完全一致。
+func _draw_poster_art(cid: String, alpha: float, push: float, pan: Vector2) -> void:
+	var tex: Texture2D = poster_tex.get(cid)
+	if tex == null or alpha <= 0.004:
+		return
+	var uv := _poster_uv(cid, push, pan)
+	var tw := float(tex.get_width())
+	var th := float(tex.get_height())
+	draw_texture_rect_region(tex, _band_rect(),
+		Rect2(uv.position.x * tw, uv.position.y * th, uv.size.x * tw, uv.size.y * th),
+		Color(1, 1, 1, alpha))
+
+## 横向 / 纵向渐变色块：一个多边形四个顶点色，GPU 自己插值，不用贴图。
+func _grad_h(x0: float, y0: float, x1: float, y1: float, c0: Color, c1: Color) -> void:
+	draw_polygon(
+		PackedVector2Array([Vector2(x0, y0), Vector2(x1, y0), Vector2(x1, y1), Vector2(x0, y1)]),
+		PackedColorArray([c0, c1, c1, c0]))
+
+func _grad_v(x0: float, y0: float, x1: float, y1: float, c0: Color, c1: Color) -> void:
+	draw_polygon(
+		PackedVector2Array([Vector2(x0, y0), Vector2(x1, y0), Vector2(x1, y1), Vector2(x0, y1)]),
+		PackedColorArray([c0, c0, c1, c1]))
+
+## 墨底 + 横幅海报 + 压暗 / 光效。
+func _draw_spirit_stage() -> void:
+	var vw := float(Cfg.VIEW_W)
+	var vh := float(Cfg.VIEW_H)
+	draw_rect(Rect2(0, 0, vw, vh), UIDraw.INK, true, -1.0, true)
+	var cid := _char(player)
+	var v := _char_visual(cid)
+	var accent: Color = v["color"]
+	var enter := ease_out(minf(1.0, stage_t / 0.68))
+	var punch := 1.0 - ease_out(minf(1.0, burst_t / 0.35))
+	# 进场是「拉远」：一开始推得近一点，再把镜头退回整块取景
+	var push := 0.18 * (1.0 - enter) + 0.08 * punch
+	var pan := Vector2(sin(t * 0.09) * 0.008, cos(t * 0.07) * 0.005 - 0.006 * punch)
+	if poster_prev != "" and poster_prev != cid and poster_mix < 1.0:
+		_draw_poster_art(poster_prev, 1.0, push + 0.06 * poster_mix, pan)
+	_draw_poster_art(cid, clampf(stage_t / 0.16, 0.0, 1.0) * (0.35 + 0.65 * poster_mix), push, pan)
+	# 角色色轻微染色 + 整体压暗，把六张不同期的海报统一到当前精灵的配色上
+	draw_rect(_band_rect(), Color(accent, 0.05), true, -1.0, true)
+	draw_rect(_band_rect(), Color(UIDraw.INK, 0.08), true, -1.0, true)
+	_draw_stage_grade()
+	UIDraw.dots(self, BAND["x"], BAND["y"], BAND["w"], BAND["h"], UIDraw.CREAM, 0.045, 14)
+	_draw_stage_fx(v, _band_rect(), enter, punch)
+
+func _draw_stage_grade() -> void:
+	var band := _band_rect()
+	var ink := UIDraw.INK
+	var bottom := band.position.y + band.size.y
+	# 画框上下各压一层，海报和墨底之间不出现生硬的横切
+	_grad_v(band.position.x, band.position.y, band.position.x + band.size.x,
+		band.position.y + band.size.y * 0.22, Color(ink, 0.50), Color(ink, 0.0))
+	_grad_v(band.position.x, band.position.y + band.size.y * 0.56, band.position.x + band.size.x,
+		bottom, Color(ink, 0.0), Color(ink, 0.55))
+	# 左右各一道窄暗边，画框像嵌在画面里
+	_grad_h(band.position.x, band.position.y, band.position.x + 96.0, bottom,
+		Color(ink, 0.40), Color(ink, 0.0))
+	_grad_h(band.position.x + band.size.x - 96.0, band.position.y,
+		band.position.x + band.size.x, bottom, Color(ink, 0.0), Color(ink, 0.40))
+	# 画框上沿一道暗边 + 左上角一小段角色色（装裱感）
+	draw_rect(Rect2(band.position.x, band.position.y, band.size.x, 2.0), Color(ink, 0.85), true, -1.0, true)
+	draw_rect(Rect2(band.position.x, band.position.y, 64.0, 2.0),
+		_char_visual(_char(player))["color"], true, -1.0, true)
+	# 边缘彩条（沿用主界面的品牌色带）
+	var bars := [UIDraw.ORANGE, UIDraw.CYAN, UIDraw.YELLOW, UIDraw.PINK, UIDraw.GREEN, UIDraw.INK]
+	var bh := float(Cfg.VIEW_H) / float(bars.size())
+	for i in bars.size():
+		draw_rect(Rect2(0, i * bh, 4, bh), bars[i], true, -1.0, true)
+		draw_rect(Rect2(float(Cfg.VIEW_W) - 4, float(Cfg.VIEW_H) - (i + 1) * bh, 4, bh),
+			bars[i], true, -1.0, true)
+
+## 镜头光效：常驻的扫光 / 浮尘，加上换人时的一次爆发（闪白 + 冲击环 + 速度线）。
+func _draw_stage_fx(v: Dictionary, art: Rect2, enter: float, punch: float) -> void:
+	var band := _band_rect()
+	var band_r := band.position.y + band.size.y
+	var focus: Vector2 = POSTER_ART.get(_char(player), {}).get("focus", Vector2(0.5, 0.4))
+	var anchor := art.position + focus * art.size
+	var accent: Color = v["color"]
+	# 1) 扫光：每 7.5 秒在横幅里从左扫到右一次
+	var sweep := fmod(t, 7.5) / 7.5
+	if sweep < 0.34:
+		var sp := sweep / 0.34
+		var bx := lerpf(band.position.x - 260.0, band.position.x + band.size.x + 260.0, sp)
+		var a := sin(sp * PI) * 0.13
+		draw_polygon(PackedVector2Array([
+			Vector2(bx, band.position.y), Vector2(bx + 150.0, band.position.y),
+			Vector2(bx + 150.0 - 190.0, band_r), Vector2(bx - 190.0, band_r),
+		]), PackedColorArray([Color(1, 1, 1, 0.0), Color(1, 1, 1, a),
+			Color(1, 1, 1, a * 0.35), Color(1, 1, 1, 0.0)]))
+	# 2) 浮尘：确定性伪随机，不占内存也不用粒子系统
+	for i in 24:
+		var h1 := _hash01(i, 1)
+		var h2 := _hash01(i, 2)
+		var h3 := _hash01(i, 3)
+		var h4 := _hash01(i, 4)
+		var spd := 14.0 + h1 * 24.0
+		var yy := band.position.y + fmod(h2 * band.size.y - t * spd, band.size.y)
+		var xx := h3 * band.size.x + sin(t * 0.5 + h4 * 6.283) * 16.0
+		var tint := accent if i % 5 == 0 else MENU_SOFT
+		draw_circle(Vector2(xx, yy), 0.8 + h4 * 1.8, Color(tint, 0.08 + h1 * 0.16), true, -1.0, true)
+	# 3) 换人爆发：闪白（只闪横幅）+ 两道冲击环 + 放射速度线
+	if burst_t < 0.72:
+		var bp := clampf(burst_t / 0.55, 0.0, 1.0)
+		var be := 1.0 - pow(1.0 - bp, 3.0)
+		var flash := maxf(0.0, 1.0 - burst_t / 0.16) * 0.42
+		if flash > 0.002:
+			draw_rect(band, Color(1.0, 0.98, 0.92, flash), true, -1.0, true)
+		for ring in 2:
+			var rp := clampf((burst_t - ring * 0.09) / 0.50, 0.0, 1.0)
+			if rp <= 0.0 or rp >= 1.0:
+				continue
+			draw_arc(anchor, 36.0 + rp * 300.0, 0, TAU, 72,
+				Color(MENU_SOFT, (1.0 - rp) * 0.30), 3.0 * (1.0 - rp) + 0.6, true)
+		var rays := 20
+		# 速度线裁到横幅里：光只在海报内部炸开，不会溅到抬头和卡牌之间的墨底上
+		var band_poly := UIDraw.rr_points(band.position.x, band.position.y, band.size.x, band.size.y, 2.0)
+		for i in rays:
+			var ra := i * TAU / float(rays) + 0.21
+			var dir := Vector2(cos(ra), sin(ra))
+			var perp := Vector2(-dir.y, dir.x)
+			var r0 := 46.0 + be * 150.0
+			var r1 := r0 + 70.0 + be * 240.0
+			var half := 4.5 * (1.0 - be) + 0.7
+			_fill_clipped(PackedVector2Array([
+				anchor + dir * r0, anchor + dir * r1 + perp * half, anchor + dir * r1 - perp * half,
+			]), band_poly, Color(MENU_SOFT, (1.0 - be) * 0.30))
+	# 4) 开场推镜时从人物身上散开一圈柔光
+	if enter < 1.0:
+		var g := 1.0 - enter
+		draw_circle(anchor, 60.0 + 150.0 * g, Color(accent, g * 0.16), true, -1.0, true)
+	# 5) 常驻的几颗装饰星，跟着画面呼吸
+	var deco := [
+		[band.position.x + band.size.x * 0.91, band.position.y + band.size.y * 0.16, 5.0, UIDraw.YELLOW, 0.2],
+		[band.position.x + band.size.x * 0.96, band.position.y + band.size.y * 0.46, 3.5, MENU_SOFT, 1.1],
+		[band.position.x + band.size.x * 0.07, band.position.y + band.size.y * 0.62, 4.0, accent, 0.7],
+		[band.position.x + band.size.x * 0.44, band.position.y + band.size.y * 0.10, 3.0, MENU_SOFT, 1.6],
+	]
+	for dd in deco:
+		UIDraw.star(self, dd[0], dd[1] + sin(t * 2 + float(dd[4]) * 5) * 4, dd[2],
+			float(dd[2]) * 0.45, dd[3], 5, t * 0.35)
+
+## 开场的电影式拉幕：墨色从上下合拢再退开，退开后整屏（含卡牌 / 按钮）才露出来。
+func _draw_stage_curtain() -> void:
+	if stage_t >= 0.62:
+		return
+	var ep := clampf(stage_t / 0.62, 0.0, 1.0)
+	var ee := 1.0 - pow(1.0 - ep, 3.0)
+	var w := float(Cfg.VIEW_W)
+	var h := float(Cfg.VIEW_H)
+	var bh := (1.0 - ee) * (h * 0.5 + 2.0)
+	if bh <= 0.0:
+		return
+	draw_rect(Rect2(0, 0, w, bh), UIDraw.INK, true, -1.0, true)
+	draw_rect(Rect2(0, h - bh, w, bh), UIDraw.INK, true, -1.0, true)
+	var accent: Color = _char_visual(_char(player))["color"]
+	draw_rect(Rect2(0, bh - 2.0, w, 2.0), Color(accent, 0.85), true, -1.0, true)
+	draw_rect(Rect2(0, h - bh, w, 2.0), Color(accent, 0.85), true, -1.0, true)
+
+func _hash01(i: int, salt: int) -> float:
+	return absf(fmod(sin(float(i) * 12.9898 + float(salt) * 78.233) * 43758.5453, 1.0))
+
+## 带墨色投影的多行文字：海报背景亮暗不定，压一层 1px 墨影保证说明文字始终读得清。
+func _draw_wrap_soft(s: String, x: float, y: float, max_w: float, size: int, line_h: float,
+		color: Color, max_lines: int) -> void:
+	var lines := UIDraw.wrap_lines(s, max_w, size, max_lines, 500, "cn")
+	for i in lines.size():
+		UIDraw.text(self, lines[i], x, y + i * line_h, {"size": size, "weight": 500, "family": "cn",
+			"fill": color, "shadow": Color(UIDraw.INK, 0.85), "shadowX": 1, "shadowY": 1})
+
+## 横幅底部的「片尾字幕带」：左边编号 / 属性 / 大名 / 称号，右边技能 / 说明 / 档案。
+## 压在海报下半部分的渐隐上，人物的脸和上半身保持干净。
+## 换人时整块不闪，只有大名的缩放和技能下划线跟着 switch_t 抖一下，避免连按方向键时文字乱跳。
+func _draw_stage_info() -> void:
 	var cid := _char(player)
 	var v := _char_visual(cid)
 	var data := Cfg.skill_cfg(cid)
 	var cfg := Cfg.char_cfg(cid)
 	var idx := int(char_index[player])
-	var x := float(POSTER["x"])
-	var y := float(POSTER["y"])
-	var w := float(POSTER["w"])
-	var h := float(POSTER["h"])
-	var pc := _player_color()
-	var tex: Texture2D = char_tex.get(cid)
-	var enter := ease_out(minf(1.0, step_t * 3.0))
-	var swap := ease_out(minf(1.0, switch_t * 4.5))
-	var disk_x := x + 520
-	var disk_y := y + 170
-	var bottom := y + 282 + sin(t * 2.2) * 3.0
-	var shift := Vector2((1.0 - enter) * -22, (1.0 - enter) * 12)
+	var accent: Color = v["color"]
+	var accent2: Color = v["accent"]
+	var punch := 1.0 - ease_out(minf(1.0, switch_t * 3.2))
+	var vw := float(Cfg.VIEW_W)
+	# 字幕带底色：从透明渐变到近墨，和下方的墨底无缝接上
+	_grad_v(0.0, 292.0, vw, 348.0, Color(UIDraw.INK, 0.0), Color(UIDraw.INK, 0.62))
+	_grad_v(0.0, 348.0, vw, BAND_BOTTOM, Color(UIDraw.INK, 0.62), Color(UIDraw.INK, 0.88))
 
-	draw_set_transform(shift, 0.0, Vector2.ONE)
-	UIDraw.panel(self, x, y, w, h, {
-		"fill": UIDraw.INK, "stroke": UIDraw.INK, "lw": 3, "r": 5,
-		"shadow": v["color"], "shadowX": 9, "shadowY": 9})
-	# menu.js:1106-1107 —— D.roundRect(x, y, w, h, 5) + ctx.clip()：
-	# 放射线半径 184 > 海报内边距，原作被裁到海报圆角矩形内，这里求交后再填充。
-	var clip_poly := UIDraw.rr_points(x, y, w, h, 5)
-	var clip_local := PackedVector2Array()
-	var disk_rotation := t * 0.055
-	for cp in clip_poly:
-		clip_local.append((cp - Vector2(disk_x, disk_y)).rotated(-disk_rotation))
-	draw_set_transform(shift + Vector2(disk_x, disk_y), disk_rotation, Vector2.ONE)
-	for ray in 22:
-		var ra := ray * TAU / 22.0
-		var dir := Vector2(cos(ra), sin(ra))
-		var perp := Vector2(-dir.y, dir.x)
-		_fill_clipped(PackedVector2Array([
-			dir * 124.0, dir * 184.0 + perp * 9.0, dir * 184.0 - perp * 9.0,
-		]), clip_local, v["color"])
-	draw_set_transform(shift, 0.0, Vector2.ONE)
-	draw_circle(Vector2(disk_x, disk_y), 118, UIDraw.CREAM, true, -1.0, true)
-	draw_arc(Vector2(disk_x, disk_y), 128, 0, TAU, 64, v["color"], 13.0, true)
-	draw_arc(Vector2(disk_x, disk_y), 136, 0, TAU, 64, UIDraw.INK, 2.0, true)
-	draw_arc(Vector2(disk_x, disk_y), 118, 0, TAU, 64, UIDraw.INK, 2.0, true)
-	UIDraw.dots(self, x, y, w, h, UIDraw.CREAM, 0.045, 12)
-	for l in 7:
-		draw_line(Vector2(x + 10, y + 70 + l * 21), Vector2(x + 54 + l * 9, y + 52 + l * 21),
-			Color(245 / 255.0, 235 / 255.0, 216 / 255.0, 0.16), 2.0, true)
-	UIDraw.text(self, pad2(idx + 1), x + w - 22, y + 102, {"size": 112, "weight": 900,
-		"family": "impact", "fill": Color(0, 0, 0, 0),
-		"stroke": Color(245 / 255.0, 235 / 255.0, 216 / 255.0, 0.12), "strokeWidth": 1.5, "align": "right"})
-	# menu.js:1163-1169 —— globalAlpha .32 + ctx.ellipse(diskX, bottom + 4, 76, 11, 0, 0, TAU)
-	CanvasArt.ellipse_rot_fill(self, disk_x, bottom + 4.0, 76.0, 11.0, 0.0,
-		Color(20 / 255.0, 16 / 255.0, 25 / 255.0, 0.32))
-	draw_set_transform(shift + Vector2(disk_x, bottom), (1.0 - swap) * -0.06 + sin(t * 1.4) * 0.01,
-		Vector2(0.9 + 0.1 * swap, 0.9 + 0.1 * swap))
-	_draw_texture_fit(tex, Vector2.ZERO, 260, 266, v["color"])
-	# menu.js:1099-1100 的 translate 直到 1268 才 restore：闪白 / 标签 / 文案 / 跑马灯
-	# 都在同一层位移里，这里不能提前归零。
-	draw_set_transform(shift, 0.0, Vector2.ONE)
-	if switch_t < 0.3:
-		_fill_clipped(_rect_poly(x, y, w, h), clip_poly,
-			Color(245 / 255.0, 235 / 255.0, 216 / 255.0, (1.0 - switch_t / 0.3) * 0.22))
+	# 左栏
+	var lx := 24.0
+	UIDraw.tag(self, "SPIRIT " + pad2(idx + 1), lx, 352, {"size": 11, "family": "mono",
+		"fill": accent, "fg": UIDraw.INK, "padX": 8, "h": 17, "align": "left",
+		"stroke": UIDraw.INK, "lw": 1})
+	UIDraw.tag(self, String(v["role"]) + "系", lx + 104, 352, {"size": 11, "family": "cn",
+		"fill": accent2, "fg": UIDraw.INK, "padX": 7, "h": 17, "align": "left",
+		"stroke": UIDraw.INK, "lw": 1})
+	draw_set_transform(Vector2(lx + 1, 394), 0.0, Vector2.ONE * (1.0 + 0.05 * punch))
+	UIDraw.text(self, cfg["name"], 0, 0, {"size": 42, "weight": 900, "family": "cn",
+		"fill": MENU_SOFT, "stroke": UIDraw.INK, "strokeWidth": 4,
+		"shadow": accent, "shadowX": 4, "shadowY": 4})
+	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+	UIDraw.text(self, cfg["title"], lx + 2, 424, {"size": 12, "weight": 900, "family": "cn",
+		"fill": accent2, "shadow": UIDraw.INK, "shadowX": 1, "shadowY": 1})
 
-	UIDraw.tag(self, "SPIRIT " + pad2(idx + 1), x + 18, y + 20, {"size": 11, "family": "mono",
-		"fill": v["color"], "fg": UIDraw.INK, "padX": 7, "h": 16, "align": "left",
-		"stroke": UIDraw.INK, "lw": 1})
-	UIDraw.tag(self, "2P" if player == 1 else "1P", x + w - 18, y + 20, {"size": 11, "family": "mono",
-		"fill": pc, "fg": UIDraw.INK, "padX": 7, "h": 16, "align": "right", "stroke": UIDraw.INK, "lw": 1})
-	UIDraw.tag(self, String(v["role"]) + "系", x + 20, y + 45, {"size": 11, "family": "cn",
-		"fill": v["accent"], "fg": UIDraw.INK, "padX": 6, "h": 14, "align": "left",
-		"stroke": UIDraw.INK, "lw": 1})
-	UIDraw.text(self, cfg["name"], x + 20, y + 84, {"size": 40, "weight": 900, "family": "cn",
-		"fill": UIDraw.CREAM, "shadow": v["color"], "shadowX": 3, "shadowY": 3})
+	# 右栏
+	var rx := 258.0
+	var rw := 438.0
 	var skill_label := ("被动 · " if bool(data.get("passive", false)) else "") + String(data["name"])
-	UIDraw.text(self, skill_label, x + 22, y + 126, {"size": 14, "weight": 900, "family": "cn", "fill": v["color"]})
-	draw_rect(Rect2(x + 22, y + 138, minf(UIDraw.measure(skill_label, 14, 900, "cn"), 300), 2), v["color"], true, -1.0, true)
-	UIDraw.wrap(self, data["desc"], x + 22, y + 156, 300, 12, 17,
-		Color(245 / 255.0, 235 / 255.0, 216 / 255.0, 0.72), 2, 500, "cn")
-	if bool(data.get("passive", false)):
-		UIDraw.text(self, "放弹%d次或%s通灵" % [int(data["bombs_to_evolve"]), "击倒" if int(_mode()["players"]) == 2 else "击杀"],
-			x + 22, y + 196, {"size": 11, "weight": 700, "family": "cn",
-			"fill": Color(245 / 255.0, 235 / 255.0, 216 / 255.0, 0.55)})
-	if cfg.has("intro"):
-		UIDraw.text(self, "LORE", x + 22, y + 216, {"size": 11, "weight": 700, "family": "mono", "fill": v["accent"]})
-		_draw_lore(String(cfg["intro"]), x + 66, y + 216, 260)
+	UIDraw.text(self, skill_label, rx, 354, {"size": 16, "weight": 900, "family": "cn",
+		"fill": MENU_SOFT, "stroke": UIDraw.INK, "strokeWidth": 2.5})
+	var skill_w := UIDraw.measure(skill_label, 16, 900, "cn")
+	var rule_w := minf(skill_w + 22.0, rw)
+	draw_rect(Rect2(rx, 366, rule_w * (0.30 + 0.70 * (1.0 - punch)), 3), accent, true, -1.0, true)
+
 	var key_text := "被动"
 	if not bool(data.get("passive", false)):
 		# 键位跟着设置走：改绑之后海报上的技能键提示同步更新。
@@ -1517,37 +1790,18 @@ func _draw_poster() -> void:
 		if InputSettings.last_source(slot) == "gamepad":
 			var labels := InputSettings.pad_labels(InputSettings.action_for(slot, "skill"))
 			key_text = String(labels[0]) if not labels.is_empty() else "未绑定"
-	var key_width := maxf(44, UIDraw.measure(key_text, 11, 700, "mono") + 12)
-	UIDraw.keycap(self, key_text, x + 22, y + 240, key_width, 20, v["color"], UIDraw.INK)
-	UIDraw.text(self, ("6 格通灵" if bool(data.get("passive", false)) else "冷却%s秒" % str(data["cd"])),
-		x + 34 + key_width, y + 250, {"size": 11, "weight": 700, "family": "mono",
-		"fill": Color(245 / 255.0, 235 / 255.0, 216 / 255.0, 0.55)})
-	UIDraw.text(self, "BOMBIT / CHARACTER FILE", x + 22, y + 273,
-		{"size": 11, "weight": 700, "family": "mono", "fill": Color(245 / 255.0, 235 / 255.0, 216 / 255.0, 0.35)})
-	var deco := [
-		[x + 340, y + 46, 6.0, UIDraw.YELLOW, 0.2],
-		[x + 386, y + 128, 4.0, UIDraw.CREAM, 1.1],
-		[x + 348, y + 236, 4.0, v["accent"], 0.7],
-		[disk_x + 74, y + 272, 5.0, UIDraw.YELLOW, 1.6],
-	]
-	for dd in deco:
-		UIDraw.star(self, dd[0], dd[1] + sin(t * 2 + float(dd[4]) * 5) * 4, dd[2],
-			float(dd[2]) * 0.45, dd[3], 5, t * 0.35)
-	draw_rect(Rect2(x, y + h - 24, w, 24), v["color"], true, -1.0, true)
-	# menu.js:1252-1266 —— 先 ctx.rect(x, y + h - 24, w, 24) + ctx.clip() 再画跑马灯文字
-	var marquee := "BOMBIT / SPIRIT SELECT / %s / %s   " % ["2P" if player == 1 else "1P", pad2(idx + 1)]
-	var stride := UIDraw.measure(marquee, 11, 700, "mono")
-	var mshift := -fmod(t * 32.0, stride)
-	var adv := {}
-	for m in ceili(w / stride) + 2:
-		_draw_text_clipped_x(marquee,
-			x + mshift + m * stride, y + h - 12, x, x + w,
-			{"size": 11, "weight": 700, "family": "mono", "fill": UIDraw.INK}, adv)
-	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+	var key_width := maxf(42, UIDraw.measure(key_text, 11, 700, "mono") + 12)
+	var key_x := rx + skill_w + 14.0
+	UIDraw.keycap(self, key_text, key_x, 344, key_width, 19, accent, UIDraw.INK)
+	UIDraw.text(self, ("6 格通灵" if bool(data.get("passive", false)) else "冷却 %s 秒" % str(data["cd"])),
+		key_x + key_width + 10.0, 354, {"size": 11, "weight": 700, "family": "mono",
+		"fill": Color(MENU_SOFT, 0.70), "shadow": Color(UIDraw.INK, 0.8), "shadowX": 1, "shadowY": 1})
 
-func _draw_lore(s: String, x: float, y: float, max_w: float) -> void:
-	UIDraw.text(self, s, x, y, {"size": 11, "weight": 500, "family": "cn",
-		"fill": Color(245 / 255.0, 235 / 255.0, 216 / 255.0, 0.72), "max_width": max_w})
+	_draw_wrap_soft(data["desc"], rx, 382, rw, 12, 18, Color(MENU_SOFT, 0.88), 2)
+	if cfg.has("intro"):
+		UIDraw.text(self, "LORE", rx, 422, {"size": 10, "weight": 700, "family": "mono",
+			"fill": accent2, "shadow": Color(UIDraw.INK, 0.8), "shadowX": 1, "shadowY": 1})
+		_draw_wrap_soft(String(cfg["intro"]), rx + 38.0, 422, rw - 36.0, 11, 15, Color(MENU_SOFT, 0.74), 2)
 
 # ---------------- ctx.clip() 的等价物 ----------------
 
@@ -1594,24 +1848,6 @@ func _draw_text_clipped_x(s: String, x: float, y: float, clip_x0: float,
 		prefix_width = next_width
 		if cx >= clip_x1:
 			return
-
-func _draw_texture_fit(tex: Texture2D, bottom_center: Vector2, max_w: float, max_h: float, fallback: Color) -> void:
-	if tex == null:
-		# menu.js:131-148 —— 素材未就绪时的占位小剪影（椭圆身体 + 奶油头 + 两只墨色眼）
-		var ph := minf(max_h, 220.0)
-		var pw := ph * 0.72
-		var pcx := bottom_center.x
-		var pbtm := bottom_center.y
-		CanvasArt.ellipse_rot_fill(self, pcx, pbtm - ph * 0.45, pw * 0.38, ph * 0.42, 0.0, fallback)
-		draw_circle(Vector2(pcx, pbtm - ph * 0.62), pw * 0.2, UIDraw.CREAM, true, -1.0, true)
-		draw_circle(Vector2(pcx - pw * 0.07, pbtm - ph * 0.64), 2.2, UIDraw.INK, true, -1.0, true)
-		draw_circle(Vector2(pcx + pw * 0.07, pbtm - ph * 0.64), 2.2, UIDraw.INK, true, -1.0, true)
-		return
-	var ts := tex.get_size()
-	var s := minf(max_w / ts.x, max_h / ts.y)
-	var dw := ts.x * s
-	var dh := ts.y * s
-	draw_texture_rect(tex, Rect2(bottom_center.x - dw * 0.5, bottom_center.y - dh, dw, dh), false)
 
 func _draw_char_tiles() -> void:
 	var rects := _char_rects()
@@ -1699,17 +1935,20 @@ func _draw_cta() -> void:
 			label = "开始对战"
 			sub = "1P + 2P READY  /  START"
 	var hovered: bool = hover.get("kind", "") == "cta"
-	var x := (Cfg.VIEW_W - BTN["w"]) * 0.5
+	var base := _cta_rect()
 	var lift := sin(pulse * 3) * 1.2 + (-2.0 if hovered else 0.0)
-	var y := BTN["y"] + lift
-	UIDraw.panel(self, x, y, BTN["w"], BTN["h"], {"fill": UIDraw.ORANGE if hovered else UIDraw.YELLOW,
+	var x := base.position.x
+	var y := base.position.y + lift
+	var w := base.size.x
+	var h := base.size.y
+	UIDraw.panel(self, x, y, w, h, {"fill": UIDraw.ORANGE if hovered else UIDraw.YELLOW,
 		"stroke": UIDraw.INK, "lw": 2.5, "r": 4, "shadow": UIDraw.INK, "shadowX": 5, "shadowY": 5})
-	UIDraw.play(self, x + 30, y + BTN["h"] * 0.5, 13, UIDraw.INK)
-	UIDraw.text(self, label, x + 48, y + BTN["h"] * 0.5 - 2, {"size": 21, "weight": 900, "family": "cn", "fill": UIDraw.INK})
-	UIDraw.text(self, sub, x + 48, y + BTN["h"] * 0.5 + 17, {"size": 11, "weight": 700, "family": "mono",
+	UIDraw.play(self, x + 30, y + h * 0.5, 13, UIDraw.INK)
+	UIDraw.text(self, label, x + 48, y + h * 0.5 - 2, {"size": 21, "weight": 900, "family": "cn", "fill": UIDraw.INK})
+	UIDraw.text(self, sub, x + 48, y + h * 0.5 + 17, {"size": 11, "weight": 700, "family": "mono",
 		"fill": Color(20 / 255.0, 16 / 255.0, 25 / 255.0, 0.7)})
-	UIDraw.keycap(self, "ENTER", x + BTN["w"] - 80, y + 18, 56, 20, UIDraw.INK, UIDraw.CREAM)
-	draw_rect(Rect2(x, y + BTN["h"] - 4, 44, 4), _player_color() if active else mode["color"], true, -1.0, true)
+	UIDraw.keycap(self, "ENTER", x + w - 80, y + 17, 56, 20, UIDraw.INK, UIDraw.CREAM)
+	draw_rect(Rect2(x, y + h - 4, 44, 4), _player_color() if active else mode["color"], true, -1.0, true)
 
 func _draw_back() -> void:
 	var hovered: bool = hover.get("kind", "") == "back"
@@ -1747,15 +1986,57 @@ func _draw_settings_button() -> void:
 		draw_circle(Vector2(r.position.x + r.size.x * 0.5, r.position.y + r.size.y * 0.5),
 			3.1, UIDraw.INK, true, -1.0, true)
 
+## 退出游戏：第一次触发只是「上膛」，QUIT_ARM_TIME 秒内再触发一次才真的退出。
+func _request_quit() -> void:
+	if not quit_armed:
+		quit_armed = true
+		quit_arm_t = QUIT_ARM_TIME
+		nav_mode = true
+		queue_redraw()
+		return
+	quit_armed = false
+	get_tree().quit()
+
+## 「退出游戏」次级按钮：一行式，未上膛是奶油卡片，悬停反色，上膛后整条变朱红 + 倒计时。
+func _draw_quit() -> void:
+	var r := _quit_rect()
+	var hovered: bool = hover.get("kind", "") == "quit"
+	var armed := quit_armed
+	var fill := UIDraw.ORANGE if armed else (UIDraw.INK if hovered else UIDraw.CREAM)
+	var fg := UIDraw.CREAM if (armed or hovered) else UIDraw.INK
+	UIDraw.panel(self, r.position.x, r.position.y, r.size.x, r.size.y, {
+		"fill": fill, "stroke": UIDraw.INK, "lw": 1.6, "r": 3,
+		"shadow": UIDraw.ORANGE if (armed or hovered) else Color(20 / 255.0, 16 / 255.0, 25 / 255.0, 0.14),
+		"shadowX": 3 if (armed or hovered) else 2, "shadowY": 3 if (armed or hovered) else 2})
+	var cy := r.position.y + r.size.y * 0.5
+	# 关闭图标
+	var gx := r.position.x + 18.0
+	draw_line(Vector2(gx - 4.0, cy - 4.0), Vector2(gx + 4.0, cy + 4.0), fg, 2.0, true)
+	draw_line(Vector2(gx + 4.0, cy - 4.0), Vector2(gx - 4.0, cy + 4.0), fg, 2.0, true)
+	UIDraw.text(self, "确认退出？" if armed else "退出游戏", r.position.x + 32.0, cy,
+		{"size": 12, "weight": 900, "family": "cn", "fill": fg})
+	UIDraw.text(self, ("再点一次 · %.1fs" % maxf(quit_arm_t, 0.0)) if armed else "QUIT GAME",
+		r.position.x + r.size.x - 12.0, cy,
+		{"size": 10, "weight": 700, "family": "mono", "align": "right",
+		"fill": Color(fg, 0.70) if (armed or hovered) else Color(20 / 255.0, 16 / 255.0, 25 / 255.0, 0.42)})
+	# 上膛时贴一条倒计时进度，2.6 秒走完自动撤销
+	if armed:
+		var w := (r.size.x - 6.0) * clampf(quit_arm_t / QUIT_ARM_TIME, 0.0, 1.0)
+		draw_rect(Rect2(r.position.x + 3.0, r.position.y + r.size.y - 4.0, w, 2.5),
+			Color(UIDraw.CREAM, 0.85), true, -1.0, true)
+
 func _draw_footer() -> void:
 	var hint := "← → 选择模式　·　ENTER 进入精灵选择" if step == "mode" else \
 		"方向键 选择　·　ENTER 确认　·　" + ("1 / 2 切换玩家　·　" if int(_mode()["players"]) == 2 else "") + "ESC 返回"
+	# 精灵选择是墨底 + 海报，脚注换成奶油色
+	var dark := step != "mode"
+	var tint := MENU_SOFT if dark else UIDraw.INK
 	UIDraw.text(self, hint, Cfg.VIEW_W * 0.5, Cfg.VIEW_H - 39,
-		{"size": 11, "weight": 700, "family": "mono", "fill": UIDraw.INK, "alpha": 0.58, "align": "center"})
+		{"size": 11, "weight": 700, "family": "mono", "fill": tint, "alpha": 0.58, "align": "center"})
 	for i in 22:
 		var bw := 2.0 if i % 4 == 0 else 1.0
 		draw_rect(Rect2(634 + i * 3, Cfg.VIEW_H - 23, bw, 11),
-			Color(20 / 255.0, 16 / 255.0, 25 / 255.0, 0.55), true, -1.0, true)
+			Color(tint, 0.55), true, -1.0, true)
 
 func _draw_settings() -> void:
 	var c := SETTINGS_CARD

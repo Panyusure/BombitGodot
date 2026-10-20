@@ -225,31 +225,34 @@ static func _radial_texture(c0: Vector2, r0: float, c1: Vector2, r1: float, stop
 
 ## 用 p0→p1 渐变轴填充任意多边形。
 static func fill_linear_gradient(ci: CanvasItem, poly: PackedVector2Array,
-		p0: Vector2, p1: Vector2, stops: Array) -> void:
+		p0: Vector2, p1: Vector2, stops: Array, tint: Color = Color(1, 1, 1, 1)) -> void:
 	if poly.size() < 3 or stops.is_empty():
 		return
 	var axis := p1 - p0
 	var len2 := axis.length_squared()
 	if len2 <= 0.000001:
-		ci.draw_colored_polygon(poly, stops[0][1])
+		ci.draw_colored_polygon(poly, Color(stops[0][1], (stops[0][1] as Color).a * tint.a))
 		return
 	var uvs := PackedVector2Array()
 	var cols := PackedColorArray()
 	for p in poly:
 		uvs.append(Vector2((p - p0).dot(axis) / len2, 0.5))
-		cols.append(Color(1, 1, 1, 1))
+		cols.append(tint)
 	ci.draw_polygon(poly, cols, uvs, _linear_texture(stops))
 
 ## 用 (c0,r0)→(c1,r1) 双圆径向渐变填充任意多边形，保留偏心内圆高光。
+## tint 是整体调色（通常只带 alpha）：色阶本身不要掺入每帧变化的透明度，
+## 否则缓存键每帧都变，会退化成「每帧重建一张 160x160 的纹理」。
 static func fill_radial_gradient(ci: CanvasItem, poly: PackedVector2Array,
-		c0: Vector2, r0: float, c1: Vector2, r1: float, stops: Array) -> void:
+		c0: Vector2, r0: float, c1: Vector2, r1: float, stops: Array,
+		tint: Color = Color(1, 1, 1, 1)) -> void:
 	if poly.size() < 3 or stops.is_empty() or r1 <= 0.0:
 		return
 	var uvs := PackedVector2Array()
 	var cols := PackedColorArray()
 	for p in poly:
 		uvs.append((p - c1) / r1 * 0.5 + Vector2(0.5, 0.5))
-		cols.append(Color(1, 1, 1, 1))
+		cols.append(tint)
 	ci.draw_polygon(poly, cols, uvs, _radial_texture(c0, r0, c1, r1, stops))
 
 # ============================================================
