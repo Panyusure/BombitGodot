@@ -3,7 +3,7 @@ extends Node2D
 ## 通灵柔光 · MOTION ID 预览台
 ##
 ## 独立场景（soul_preview.tscn），用来审阅 / 截图这套美术动画：
-##   SPACE 手动通灵   A 开关光环   S 慢放   R 重置
+##   方向键 原地行走/转向   W 自动步态开关   SPACE 通灵   A 光环   S 慢放   R 重置
 ## 角色仍然是游戏里的 EntityView，因此看到的就是实机效果，不是另一套实现。
 ##
 ## 背景 / 版式延续 BombIt 的 Motion UI：奶油纸、墨线、硬阴影、半调网点、编辑部标签。
@@ -23,7 +23,8 @@ var view: EntityView = null
 var _ui: Node2D = null
 var _time := 0.0
 var _auto_clock := 3.0
-var _auto := true
+var _auto := false
+var _walk := true
 var _slow := false
 
 func _ready() -> void:
@@ -74,6 +75,21 @@ func _process(delta: float) -> void:
 	if _auto and _auto_clock <= 0.0:
 		trigger_awaken()
 		_auto_clock = 7.0
+	var up := Input.is_key_pressed(KEY_UP)
+	var down := Input.is_key_pressed(KEY_DOWN)
+	var left := Input.is_key_pressed(KEY_LEFT)
+	var right := Input.is_key_pressed(KEY_RIGHT)
+	actor.moving = _walk or up or down or left or right
+	if up:
+		actor.facing_dir = "up"
+	elif down:
+		actor.facing_dir = "down"
+	elif left:
+		actor.facing_dir = "left"
+		actor.facing = -1
+	elif right:
+		actor.facing_dir = "right"
+		actor.facing = 1
 	view.update_view(0.0, _time, dt)
 	_ui.queue_redraw()
 
@@ -91,7 +107,11 @@ func _unhandled_input(event: InputEvent) -> void:
 			view.soul_enabled = not view.soul_enabled
 		KEY_S:
 			_slow = not _slow
+		KEY_W:
+			_walk = not _walk
 		KEY_R:
+			view._spirit_phase = 0.0
+			view._wing_phase = 0.0
 			_time = 0.0
 			trigger_awaken()
 		KEY_ESCAPE:
@@ -153,14 +173,14 @@ func _ui_header(ci: CanvasItem) -> void:
 			Color(CREAM.r, CREAM.g, CREAM.b, 0.20), 1.0)
 
 func _ui_title(ci: CanvasItem) -> void:
-	UIDraw.text(ci, "通灵柔光", 44, 96, {
+	UIDraw.text(ci, "通灵步态", 44, 96, {
 		"size": 44, "weight": 900, "fill": CREAM,
 		"shadow": PINK, "shadowX": 3, "shadowY": 3,
 	})
-	UIDraw.text(ci, "SOUL BLOOM / 无 blur 图元", 46, 137, {
+	UIDraw.text(ci, "SPIRIT WALK / 16 帧 · 独立扇翼", 46, 137, {
 		"size": 9, "family": "mono", "fill": CYAN,
 	})
-	UIDraw.text(ci, "未来 · 通灵觉醒 / 从轮廓距离场里长出来的柔光", 46, 156, {
+	UIDraw.text(ci, "未来与守护兽 · 正背面行走 / 停步持续扇翼", 46, 156, {
 		"size": 10, "weight": 500, "fill": Color(CREAM.r, CREAM.g, CREAM.b, 0.60),
 	})
 	# 标题右侧的小贴纸：把“技术”变成版式的一部分
@@ -173,10 +193,10 @@ func _ui_title(ci: CanvasItem) -> void:
 
 func _ui_notes(ci: CanvasItem) -> void:
 	var notes := [
-		["01", "CONTOUR", "SDF 轮廓 / 4 次采样", "主光 3 次（含色散）+ 墨晕 1 次", CYAN],
-		["02", "FALLOFF", "解析指数衰减", "没有高斯核，也没有后处理", PINK],
-		["03", "CHROMA", "左右偏移 → 灵视重影", "青 / 粉两枚轮廓在呼吸", CYAN],
-		["04", "INK", "紫墨晕压住浅色底", "柔光在奶油纸 / 地砖上也立得住", GOLD],
+		["01", "GAIT", "双腿交替 / 16 帧循环", "支撑、抬脚与落脚连贯", CYAN],
+		["02", "WINGS", "守护兽双翼独立扇动", "停步后双脚站稳，翅膀继续活动", PINK],
+		["03", "FACING", "正背面 / 左右翻转", "方向键原地切换朝向", CYAN],
+		["04", "GLOW", "保留通灵柔光与法环", "A 开关光环 · S 慢放检查细节", GOLD],
 	]
 	var y := 236.0
 	for note in notes:
@@ -278,6 +298,9 @@ func _ui_timeline(ci: CanvasItem) -> void:
 	})
 
 func _ui_controls(ci: CanvasItem) -> void:
+	UIDraw.text(ci, "方向键：朝向与步态  W：自动行走 " + ("开" if _walk else "关"), 252, 587, {
+		"size": 9, "fill": CYAN,
+	})
 	var y := 653.0
 	var x := 252.0
 	_key(ci, "SPACE", x, y)

@@ -1,0 +1,25 @@
+{
+  "character": "weilai",
+  "frames_per_direction": 16,
+  "directions": {
+    "up": "walk_back.png",
+    "down": "walk_front.png",
+    "right": "walk_front.png",
+    "left": "walk_front.png (flipped)"
+  },
+  "frame_size": [
+    256,
+    320
+  ],
+  "columns": 4,
+  "rows": 4,
+  "content_height": 296,
+  "pivot": [
+    0.5,
+    0.9625
+  ],
+  "authored_cycle_seconds": 1,
+  "game_cycle_rate": "EntityView motion.stride / TAU, scaled by movement speed effects",
+  "front_source": "E:\\MinimaxH3\\ComfyUI-aki-v3.2\\ComfyUI\\output\\weilai\\weilai_walk_rigged_002",
+  "back_source": "E:\\MinimaxH3\\ComfyUI-aki-v3.2\\ComfyUI\\output\\weilai\\weilai_walk_back_rigged_001"
+}

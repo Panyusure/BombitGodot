@@ -4,6 +4,10 @@ extends Node2D
 ## 角色 / 敌人立绘：脚底锚点、朝向翻转、弹跳摇摆、护盾、星星、受击与死亡。
 ## 动效参数与锚点对照原作 sprites.js drawCharacter / drawEnemy。
 
+const WeilaiWalk = preload("res://scripts/WeilaiWalk.gd")
+const SpiritRig = preload("res://scripts/WeilaiSpiritRig.gd")
+const CharacterRig = preload("res://scripts/CharacterMotionRig.gd")
+
 static var _tex_cache := {}
 
 ## 动效参数：原作 assets/characters.js 每个角色自带 motion，缺省见 assets.js:22 DEFAULT_MOTION。
@@ -54,6 +58,19 @@ var tag: Label
 var _tex: Texture2D
 var _cur_id := ""
 var _using_back := false
+var _walking := false
+var _walk_phase := 0.0
+var _spirit_active := false
+var _spirit_phase := 0.0
+var _wing_phase := 0.0
+var _spirit_rigs: Dictionary = {}
+var _spirit_rig: RefCounted = null
+var _character_motion := false
+var _gait_phase := 0.0
+var _secondary_phase := 0.0
+var _secondary_strength := 0.35
+var _character_rigs: Dictionary = {}
+var _character_rig: RefCounted = null
 var _scale := 1.0
 var _display := Vector2(48, 48)
 var _time := 0.0
@@ -187,6 +204,8 @@ func _load_tex(path: String) -> Texture2D:
 	return tex
 
 func _player_texture(id: String, back: bool, evolved: bool) -> Texture2D:
+	if _walking:
+		return WeilaiWalk.frame(back, _walk_phase)
 	if evolved and id == "weilai":
 		return _load_tex("res://assets/characters/weilai-awakened%s.png" % ("-back" if back else ""))
 	return _load_tex("res://assets/characters/%s%s.png" % [id, "-back" if back else ""])
@@ -227,9 +246,14 @@ func _refresh_texture(force: bool = false) -> void:
 			target_h = 3.05 * Cfg.TILE
 			# 通灵形态是独立素材：正面锚点 0.53、背面 0.5（assets/characters.js:81 / :114）。
 			anchor = Vector2(0.5 if _using_back else 0.53, 0.97)
-		_base_h = target_h
+	var reference_height := float(tex.get_height())
+	if _walking:
+		reference_height = WeilaiWalk.CONTENT_HEIGHT
+		# Keep the source standing pose and animated sole on the same baseline.
+		anchor = WeilaiWalk.PIVOT - Vector2(0.0, WeilaiWalk.CONTENT_HEIGHT / WeilaiWalk.FRAME_SIZE.y * (1.0 - anchor.y))
+	_base_h = target_h
 	_anchor = anchor
-	_scale = target_h / float(tex.get_height())
+	_scale = target_h / reference_height
 	_display = Vector2(tex.get_width() * _scale, tex.get_height() * _scale)
 	sprite.scale = Vector2(_scale, _scale)
 	sprite.position = Vector2(-tex.get_width() * _scale * anchor.x,
@@ -249,13 +273,64 @@ func update_view(alpha: float, time_now: float, delta: float) -> void:
 		return
 	_time += delta
 	world_time = time_now
+	_character_motion = not is_enemy and actor.alive and CharacterRig.supports(actor.asset_id)
+	_spirit_active = not is_enemy and actor.asset_id == "weilai" and actor.soul_evolved and actor.alive
+	var walk_now: bool = not is_enemy and actor.asset_id == "weilai" and not actor.soul_evolved and actor.alive and actor.moving
+	var walk_changed := walk_now != _walking
+	if walk_now and _walking:
+		var rate: float = (1.0 + actor.speed_bonus) * (1.30 if actor.insight_time > 0.0 else 1.0)
+		rate *= minf(0.5 if actor.slow_time > 0.0 else 1.0, Skills.slow_factor(actor))
+		_walk_phase = fposmod(_walk_phase + delta * float(_motion["stride"]) / TAU * rate, 1.0)
+	elif walk_changed:
+		_walk_phase = 0.0
+	_walking = walk_now
 	var back_now := (not is_enemy) and actor.facing_dir == "up"
 	var evolved_now: bool = actor.soul_evolved and actor.asset_id == "weilai"
 	var rage_now: bool = is_enemy and actor.type == "boss" and actor.phase >= 3
-	if back_now != _using_back or (rage_now != (_cur_id == "boss_rage")) \
+	if walk_changed or back_now != _using_back or (rage_now != (_cur_id == "boss_rage")) \
 			or (not is_enemy and evolved_now != (_cur_id == "awakened")):
 		_refresh_texture(true)
 	_cur_id = "boss_rage" if rage_now else ("awakened" if evolved_now else "")
+	if _walking:
+		sprite.texture = WeilaiWalk.frame(_using_back, _walk_phase)
+	if _spirit_active:
+		if not _spirit_rigs.has(_using_back):
+			var rig := SpiritRig.new()
+			rig.configure(_using_back)
+			_spirit_rigs[_using_back] = rig
+		_spirit_rig = _spirit_rigs[_using_back]
+		if actor.moving:
+			var speed_rate: float = (1.0 + actor.speed_bonus) * (1.30 if actor.insight_time > 0.0 else 1.0)
+			speed_rate *= minf(0.5 if actor.slow_time > 0.0 else 1.0, Skills.slow_factor(actor))
+			_spirit_phase = fposmod(_spirit_phase + delta * float(_motion["stride"]) / TAU * speed_rate, 1.0)
+		else:
+			_spirit_phase = 0.0
+		# Wings have their own clock: stopping freezes the feet, never the wings.
+		_wing_phase = fposmod(_wing_phase + delta * (1.45 if actor.moving else 1.10), 1.0)
+		_spirit_rig.update(_spirit_phase, _wing_phase, actor.moving)
+	else:
+		_spirit_phase = 0.0
+
+	if _character_motion:
+		var key: String = actor.asset_id + ("/back" if _using_back else "/front")
+		if not _character_rigs.has(key):
+			var rig := CharacterRig.new()
+			rig.configure(actor.asset_id, _using_back)
+			_character_rigs[key] = rig
+		_character_rig = _character_rigs[key]
+		var profile: Dictionary = CharacterRig.Profiles.PROFILES[actor.asset_id]
+		if actor.moving:
+			var movement_rate: float = (1.0 + actor.speed_bonus) * (1.30 if actor.insight_time > 0.0 else 1.0)
+			movement_rate *= minf(0.5 if actor.slow_time > 0.0 else 1.0, Skills.slow_factor(actor))
+			_gait_phase = fposmod(_gait_phase + delta * float(_motion["stride"]) / TAU * movement_rate, 1.0)
+		else:
+			_gait_phase = 0.0
+		_secondary_phase = fposmod(_secondary_phase + delta * float(profile["secondary_rate"]) * (1.0 if actor.moving else 0.55), 1.0)
+		var target_strength := 1.0 if actor.moving else float(profile["idle_strength"])
+		_secondary_strength = move_toward(_secondary_strength, target_strength, delta * 3.0)
+		_character_rig.update(_gait_phase, _secondary_phase, actor.moving, _secondary_strength)
+	else:
+		_gait_phase = 0.0
 
 	var px := lerpf(actor.px, actor.x, alpha)
 	var py := lerpf(actor.py, actor.y, alpha)
@@ -287,7 +362,11 @@ func update_view(alpha: float, time_now: float, delta: float) -> void:
 		var m: Dictionary = _motion
 		var st := float(m["squash"])
 		if actor.alive:
-			if actor.moving:
+			if _walking or _spirit_active or _character_motion:
+				# Both rigs own their legs/body motion; avoid whole-image squash.
+				var gait_phase := _gait_phase if _character_motion else (_spirit_phase if _spirit_active else _walk_phase)
+				lift = absf(sin(gait_phase * TAU)) if actor.moving else 0.0
+			elif actor.moving:
 				var ph := _time * float(m["stride"])
 				var wave := sin(ph)
 				# pow(0.82)：顶部更「悬」、触地更干脆，比纯 |sin| 更有弹性
@@ -502,5 +581,12 @@ func _draw_sprite() -> void:
 	# 敌人的立绘另有 +2 / +8 的脚底微调（sprites.js:1085-1092）。
 	var eoff := 0.0 if not is_enemy else (8.0 if actor.type == "boss" else 2.0)
 	var off := Vector2(-_display.x * _anchor.x, -_display.y * _anchor.y + eoff)
-	draw_texture_rect(tex, Rect2(off.x, off.y, _display.x, _display.y), false, Color(1, 1, 1, _alpha))
+	if _character_motion and _character_rig != null:
+		var source_to_local := Transform2D(0.0, Vector2(_scale, _scale), 0.0, off)
+		draw_mesh(_character_rig.mesh, tex, source_to_local, Color(1, 1, 1, _alpha))
+	elif _spirit_active and _spirit_rig != null:
+		var source_to_local := Transform2D(0.0, Vector2(_scale, _scale), 0.0, off)
+		draw_mesh(_spirit_rig.mesh, tex, source_to_local, Color(1, 1, 1, _alpha))
+	else:
+		draw_texture_rect(tex, Rect2(off.x, off.y, _display.x, _display.y), false, Color(1, 1, 1, _alpha))
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
