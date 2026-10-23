@@ -22,11 +22,13 @@
 
 | 晨露森林 | 星汽工厂 |
 |---|---|
-| ![森林](docs/screenshots/gameplay-forest.png) | ![工厂](docs/screenshots/gameplay-factory.png) |
+| ![森林地图预览](docs/screenshots/map-forest-v2.4.png) | ![工厂地图预览](docs/screenshots/map-factory-v2.4.png) |
 
 | 星糖游乐园 | 鲁鲁旦 BOSS |
 |---|---|
-| ![游乐园](docs/screenshots/gameplay-park.png) | ![BOSS](docs/screenshots/boss.png) |
+| ![游乐园地图预览](docs/screenshots/map-park-v2.4.png) | ![BOSS](docs/screenshots/boss.png) |
+
+v2.4 地图预览由实际游戏渲染生成。[查看旋转木马运行动画](docs/旋转木马动画.md)。
 
 | 暂停 | 结算 |
 |---|---|
@@ -76,7 +78,7 @@
 
 本机移动采用客户端预测，并按房主确认的输入校正位置；炸弹、技能结果、伤害与胜负仍由房主决定。两端需要使用相同的新版本。
 
-v2.3 Windows 下载包为五位精灵与「未来」加入正背面行走步态，通灵形态的双腿与守护兽扇翼独立活动。两端都使用 v2.3 即可按上述步骤联机；详细更新见 [v2.3 发布说明](docs/发布说明-v2.3.md)，网络实现与验证范围见 [局域网联机说明](docs/局域网联机.md)。
+v2.4 重绘森林、工厂、游乐园的软硬砖与中央设施，收紧砖缝；游乐园中央旋转木马使用 MiniMax H3 的 32 帧循环动画。两端都使用 v2.4 即可按上述步骤联机；详细更新见 [v2.4 发布说明](docs/发布说明-v2.4.md)，网络实现与验证范围见 [局域网联机说明](docs/局域网联机.md)。
 
 ---
 
@@ -148,7 +150,7 @@ v2.3 Windows 下载包为五位精灵与「未来」加入正背面行走步态�
 
 ## 下载与运行
 
-1. 到 [Releases](https://github.com/Panyusure/BombitGodot/releases/latest) 下载 `BombIt-Godot-v2.3-win64.zip`。
+1. 到 [Releases](https://github.com/Panyusure/BombitGodot/releases/latest) 下载 `BombIt-Godot-v2.4-win64.zip`。
 2. 解压到任意目录，双击 **`启动游戏.bat`**（或直接运行 `BombitGodot.exe`）。
 3. `BombitGodot.exe` 和 `BombitGodot.pck` 必须放在同一目录，别只拷一个。
 

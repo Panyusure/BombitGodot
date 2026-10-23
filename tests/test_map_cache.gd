@@ -47,6 +47,12 @@ func test_retained_bricks() -> void:
 		for cell in painter._cells.values():
 			correct_theme = correct_theme and cell.theme == next_theme
 		check(correct_theme and painter._cells.size() == w.count_bricks(), "%s theme switch refreshes all content" % theme_id)
+		painter.world = null
+		painter.sync_cells()
+		check(painter._cells.is_empty(), "%s clearing world removes retained bricks" % theme_id)
+		painter.world = w
+		painter.sync_cells()
+		check(painter._cells.size() == w.count_bricks(), "%s restoring world rebuilds retained bricks" % theme_id)
 		painter.free()
 
 func test_arrow_segments() -> void:

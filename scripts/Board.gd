@@ -1,5 +1,7 @@
 extends Node2D
 
+const Carousel = preload("res://scripts/CarouselArt.gd")
+
 ## 战场动态层：静态地图用 SubViewport 缓存，动态层绘制传送带箭头、木马、
 ## 毒刺、道具、火焰、技能特效与爆炸范围。炸弹由 BombView 参与角色深度排序。
 ##
@@ -18,11 +20,14 @@ var world: World = null:
 			_painter_base.queue_redraw()
 		if _painter_dest != null:
 			_painter_dest.world = value
+			if value == null:
+				_painter_dest.sync_cells()
 			_painter_dest.queue_redraw()
 		if _vp_base != null:
 			_vp_base.render_target_update_mode = SubViewport.UPDATE_ONCE
 		if _vp_dest != null:
 			_vp_dest.render_target_update_mode = SubViewport.UPDATE_ONCE
+		queue_redraw()
 var font: Font = null
 var anim_time := 0.0
 var hint_alpha := 1.0
@@ -70,6 +75,7 @@ func _draw() -> void:
 	if world == null or world.map.is_empty():
 		return
 	_ensure_map()
+	Carousel.draw(self, world.theme, world.landmark, anim_time)
 	# 层序照原作 main.js renderPlaying：drawMap（缓存 → 环路动效 → 柔光微粒）
 	# → 毒刺 → 爆炸范围预览 → 道具 → 火焰 → 技能特效。
 	MapArt.draw_scenery_motion(self, world.landmark, anim_time)

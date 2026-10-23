@@ -2,7 +2,7 @@
 # 绿色包内容与 docs/绿色包说明.txt 的【文件】清单保持一致。
 param(
     [ValidatePattern('^[0-9]+\.[0-9]+(?:\.[0-9]+)?$')]
-    [string]$Version = '2.1',
+    [string]$Version = '2.4',
     [switch]$SkipWeb
 )
 
@@ -45,7 +45,9 @@ Copy-Item "$root\启动CLI.bat", "$root\bombit-mcp.bat" $dist
 New-Item -ItemType Directory -Path (Join-Path $dist "docs\screenshots"), (Join-Path $dist "mcp") -Force | Out-Null
 Copy-Item "$root\docs\Godot-CLI与MCP.md", "$root\docs\迁移对照.md" (Join-Path $dist "docs")
 Copy-Item "$root\docs\局域网联机.md", "$root\docs\发布说明-v$Version.md" (Join-Path $dist "docs")
+Copy-Item "$root\docs\地图美术重构.md", "$root\docs\旋转木马动画.md" (Join-Path $dist "docs")
 Copy-Item "$root\docs\screenshots\*.png" (Join-Path $dist "docs\screenshots")
+Copy-Item "$root\docs\screenshots\carousel-animation.webp" (Join-Path $dist "docs\screenshots")
 
 # MCP 样例不写死本机路径，解压到哪都能照着改。
 $mcpSample = @'

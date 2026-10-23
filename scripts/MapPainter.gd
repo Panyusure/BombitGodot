@@ -32,7 +32,15 @@ class BrickCell extends Node2D:
 ## Preserve each brick's draw commands. Removing one brick no longer rebuilds
 ## every surviving brick's curves and gradients; the viewport still composites once.
 func sync_cells() -> void:
-	if not retain_cells or world == null:
+	if not retain_cells:
+		return
+	if world == null:
+		for cell in _cells.values():
+			remove_child(cell)
+			cell.queue_free()
+		_cells.clear()
+		_detail_key = ""
+		queue_redraw()
 		return
 	var lm: Dictionary = world.landmark
 	var has_landmark := not lm.is_empty() and String(lm.get("theme", "")) == world.theme

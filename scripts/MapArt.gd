@@ -6,6 +6,7 @@ extends RefCounted
 
 const TILE = 48.0
 const TAU2 = PI * 2.0
+const ArtSkin = preload("res://scripts/MapSkin.gd")
 
 static func ellipse(ci: CanvasItem, x: float, y: float, rx: float, ry: float, color: Color) -> void:
 	# 交给 CanvasArt 按弓高自适应细分；原来固定 28 段，68×28 的大椭圆会有可见折角。
@@ -72,6 +73,8 @@ static func poly_line(ci: CanvasItem, pts: PackedVector2Array, color: Color, wid
 # ---------------- 地板 ----------------
 
 static func draw_floor(ci: CanvasItem, theme: String, map_data: Array) -> void:
+	if ArtSkin.floor_map(ci, theme):
+		return
 	var p = Cfg.theme(theme)
 	ci.draw_rect(Rect2(0, 0, Cfg.FIELD_W, Cfg.FIELD_H), p["floor"], true, -1.0, true)
 	for r in Cfg.ROWS:
@@ -130,6 +133,8 @@ static func draw_floor(ci: CanvasItem, theme: String, map_data: Array) -> void:
 # ---------------- 硬墙 ----------------
 
 static func draw_hard(ci: CanvasItem, c: int, r: int, theme: String) -> void:
+	if ArtSkin.hard(ci, c, r, theme):
+		return
 	if c == 0 or r == 0 or c == Cfg.COLS - 1 or r == Cfg.ROWS - 1:
 		MapDetail.border(ci, theme, c, r)
 		return
@@ -224,6 +229,8 @@ static func draw_hard(ci: CanvasItem, c: int, r: int, theme: String) -> void:
 # ---------------- 软砖 ----------------
 
 static func draw_brick(ci: CanvasItem, c: int, r: int, theme: String, variant: int) -> void:
+	if ArtSkin.brick(ci, c, r, theme, variant):
+		return
 	if variant != 0:
 		draw_brick_variant(ci, c, r, theme, variant)
 		return
@@ -357,9 +364,9 @@ static func draw_track(ci: CanvasItem, lm: Dictionary) -> void:
 	for cell in path:
 		pts.append(Vector2(Grid.center_x(cell.x), Grid.center_y(cell.y)))
 	pts.append(pts[0])
-	ci.draw_polyline(pts, Color("#b38ba5") if park else Color("#7a9197"), 46.0, true)
-	ci.draw_polyline(pts, Color("#ead3b9") if park else Color("#3e5560"), 40.0, true)
-	ci.draw_polyline(pts, Color("#dec0cb") if park else Color("#596e76"), 32.0, true)
+	ci.draw_polyline(pts, Color("#b38ba5") if park else Color("#80b9b7"), 46.0, true)
+	ci.draw_polyline(pts, Color("#ead3b9") if park else Color("#d6e9dc"), 40.0, true)
+	ci.draw_polyline(pts, Color("#dec0cb") if park else Color("#8fc4c0"), 32.0, true)
 	_dashed_polyline(ci, pts, Color(255 / 255.0, 246 / 255.0, 213 / 255.0, 0.42) if park
 		else Color(183 / 255.0, 208 / 255.0, 206 / 255.0, 0.22), 30.0,
 		3.0 if park else 2.0, 9.0 if park else 10.0)
@@ -389,6 +396,8 @@ static func _dashed_polyline(ci: CanvasItem, pts: PackedVector2Array, color: Col
 
 static func draw_landmark(ci: CanvasItem, lm: Dictionary) -> void:
 	if lm.is_empty():
+		return
+	if ArtSkin.landmark(ci, lm):
 		return
 	var x = Grid.center_x(7)
 	var y = Grid.center_y(6)
